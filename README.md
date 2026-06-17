@@ -6,7 +6,18 @@
 
 专为「禁止安装哪吒 / Komari 等探针」的 NAT、家宽、受限 VPS 设计 —— 因为被控端没有 agent、没有守护进程、没有上报连接,常规探针检测无从识别。
 
-> 单文件 Bash 脚本,无依赖安装。兼容 Debian / Ubuntu / Alpine / OpenWrt,采集脚本为 POSIX `sh`,主控侧需要 `bash`。
+> 主控脚本 `VolMon.sh` 为单文件 Bash;被控助手 `volmon-node.sh` 为纯 POSIX `sh`。兼容 Debian / Ubuntu / Alpine / OpenWrt。
+
+---
+
+## 仓库文件
+
+| 文件 | 跑在 | 作用 |
+|------|------|------|
+| `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
+| `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
+
+被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
 ---
 
@@ -36,8 +47,8 @@ VolMonitor 把方向反过来:
 
 ## 功能特性
 
-- **零常驻被控端**：默认不在被控机留任何文件或进程。
-- **离线 / 恢复告警**：连续拉取失败达阈值判定离线并推送,恢复时推送恢复通知,边沿触发不刷屏。
+- **零常驻被控端**:默认不在被控机留任何文件或进程。
+- **离线 / 恢复告警**:连续拉取失败达阈值判定离线并推送,恢复时推送恢复通知,边沿触发不刷屏。
 - **磁盘告警**:磁盘使用率超阈值推送(可关闭)。
 - **状态总览**:每节点显示「最后检测 / 最后在线 / 连续失败」及运行时长、负载、内存、磁盘、累计流量、TCP 连接数、运行中的代理服务。
 - **节点备注名**:中文友好名,推送与列表中以「备注名 [节点名]」显示,一眼识别是哪台。
@@ -63,21 +74,23 @@ VolMonitor 把方向反过来:
 
 ## 安装
 
+**主控机:**
+
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/chnnic/VolMonitor/main/VolMon.sh
 chmod +x VolMon.sh
 ./VolMon.sh
 ```
 
-或:
+**被控机(可选,仅在使用受限公钥时):**
 
 ```bash
-wget https://raw.githubusercontent.com/chnnic/VolMonitor/main/VolMon.sh
-chmod +x VolMon.sh
-./VolMon.sh
+curl -fsSLO https://raw.githubusercontent.com/chnnic/VolMonitor/main/volmon-node.sh
+chmod +x volmon-node.sh
+./volmon-node.sh
 ```
 
-首次运行会在 `~/.nat-monitor/` 下生成配置目录。
+首次运行主控会在 `~/.nat-monitor/` 下生成配置目录。
 
 ---
 
@@ -97,10 +110,10 @@ chmod +x VolMon.sh
 
 ### 被控机
 
-被控机**默认无需安装任何东西**。若希望使用「受限监控公钥」加固登录方式,见下一节;若只想本地手动看状态,把脚本丢上去执行:
+被控机**默认无需安装任何东西**。若希望使用「受限监控公钥」加固登录,见下一节。只想本地手动看状态可直接:
 
 ```bash
-./VolMon.sh local      # 打印本机状态
+./volmon-node.sh status
 ```
 
 ---
@@ -109,22 +122,32 @@ chmod +x VolMon.sh
 
 让主控拉取时用的那把钥匙**权限降到最低**:它只能执行一个只读采集脚本,无法获得 shell、无法做任何端口 / agent / X11 转发、不分配 pty。即使私钥泄露,也只能看到监控数据。
 
-在被控机上运行:
-
-```bash
-./VolMon.sh agent-key
-```
-
-- **方式 1(推荐)**:在主控生成密钥对,把**公钥**粘贴到这里安装 —— 私钥永不离开主控。
-- **方式 2**:在被控本机生成密钥对,脚本打印**私钥**供你转交主控,随后本机自动抹除私钥,只保留受限公钥。
-
-安装后,被控的 `~/.ssh/authorized_keys` 中该行形如:
+被控的 `~/.ssh/authorized_keys` 中该行形如:
 
 ```
 command="/usr/local/bin/volmon-collect",no-port-forwarding,no-agent-forwarding,no-x11-forwarding,no-pty ssh-ed25519 AAAA... volmon-master
 ```
 
-采集脚本落地到 `/usr/local/bin/volmon-collect`(不可写则退到 `~/.volmon-collect`),仅为按需运行的只读脚本 —— 无常驻进程、无监听端口、无外联,不触发探针检测。`agent-key` 菜单中 `u` 可一键卸载该公钥行与采集脚本。
+采集脚本落地到 `/usr/local/bin/volmon-collect`(不可写则退到 `~/.volmon-collect`),仅为按需运行的只读脚本 —— 无常驻进程、无监听端口、无外联,不触发探针检测。
+
+### 用 volmon-node.sh(被控机,推荐)
+
+```bash
+./volmon-node.sh add "ssh-ed25519 AAAA... 主控公钥"   # 粘贴主控公钥安装
+./volmon-node.sh gen                                  # 本机生成密钥对,打印私钥转交主控
+./volmon-node.sh status                               # 看本机状态
+./volmon-node.sh remove                               # 卸载
+./volmon-node.sh                                       # 无参数进菜单
+```
+
+- **方式 1(推荐)**:在主控生成密钥对,把**公钥**粘到被控 `add` —— 私钥永不离开主控。
+- **方式 2**:被控 `gen` 生成,脚本打印**私钥**供你转交主控,随后本机自动抹除私钥,只留受限公钥。
+
+### 用 VolMon.sh(若主控脚本也在被控上)
+
+```bash
+./VolMon.sh node-key      # 菜单 7 → k 亦可
+```
 
 > 启用受限公钥后主控侧无需任何改动,照常拉取即可。
 
@@ -132,10 +155,10 @@ command="/usr/local/bin/volmon-collect",no-port-forwarding,no-agent-forwarding,n
 
 ## 菜单 / 命令参考
 
-### 命令行
+### VolMon.sh(主控)
 
 ```
-VolMon.sh [run|status|local|daemon|test-tg|agent-key|shortcut|menu]
+VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|menu]
 ```
 
 | 命令 | 说明 |
@@ -143,26 +166,27 @@ VolMon.sh [run|status|local|daemon|test-tg|agent-key|shortcut|menu]
 | *(无参数)* | 进入交互菜单 |
 | `run` | 拉取一次所有节点(供 cron 调用) |
 | `status` | 显示本地快照状态总览(最后检测 / 在线) |
-| `local` | 显示本机状态(被控机本地查看) |
+| `local` | 显示本机状态 |
 | `daemon` | 前台循环轮询 |
 | `test-tg` | Telegram 推送测试 |
-| `agent-key` | 被控机:安装 / 卸载受限监控公钥 |
+| `node-key` | 被控机:安装 / 卸载受限监控公钥 |
 | `shortcut` | 安装 `volmon` 快捷命令 |
 
-### 交互菜单
+交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `0` 退出
 
-| 选项 | 功能 |
+### volmon-node.sh(被控)
+
+```
+volmon-node.sh [add ["公钥"]|gen|status|remove|menu]
+```
+
+| 命令 | 说明 |
 |------|------|
-| `1` | 拉取一次并显示所有节点状态 |
-| `2` | 状态总览(最后检测 / 最后在线) |
-| `3` | 节点管理(增 / 删 / 改备注 / 列) |
-| `4` | Telegram 配置 + 测试推送 |
-| `5` / `6` | 安装 / 移除 cron 定时拉取 |
-| `7` | 被控机功能(本机状态 / 安装受限公钥) |
-| `8` | 前台 daemon 轮询 |
-| `9` | 密钥管理(导入 / 列出 / 删除) |
-| `s` | 安装启动快捷命令 `volmon` |
-| `0` | 退出 |
+| `add [公钥]` | 安装受限监控公钥(带参数直接装,否则提示粘贴) |
+| `gen` | 本机生成密钥对并安装受限公钥,打印私钥给主控 |
+| `status` | 查看本机状态 |
+| `remove` | 卸载受限公钥与采集脚本 |
+| *(无参数)* | 进入交互菜单 |
 
 ---
 
@@ -241,6 +265,8 @@ nat-home|nat.example.xyz|2222|root|/root/.nat-monitor/keys/hk.key|香港家宽
 ---
 
 ## 文件布局
+
+主控端:
 
 ```
 ~/.nat-monitor/
