@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.3"
+VER="1.2.4"
 
 # ---------- 路径 ----------
 BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
@@ -331,8 +331,7 @@ node_install_pubkey(){
 node_key_menu(){
   load_conf
   while true; do
-    cls
-    echo -e "${CB}被控机 · 受限监控公钥${C0}"
+    cls; banner "被控机 · 受限监控公钥"; echo
     echo -e "  ${CB}1${C0}) 粘贴主控公钥并安装(推荐,私钥不离开主控)"
     echo -e "  ${CB}2${C0}) 本机生成密钥对(打印私钥转交主控)"
     echo -e "  ${CB}u${C0}) 卸载受限公钥与采集脚本"
@@ -443,7 +442,7 @@ key_del(){
 
 key_menu(){
   while true; do
-    cls; key_list; echo
+    cls; banner "密钥管理"; echo; key_list; echo
     echo -e "  ${CB}i${C0}) 导入  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
     read -rp "选择: " s
     case "$s" in
@@ -584,8 +583,8 @@ tg_test(){
 tg_menu(){
   while true; do
     load_conf
-    cls
-    echo -e "${CB}Telegram${C0}  TOKEN:${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}  CHAT_ID:${TG_CHAT_ID:-未设置}"
+    cls; banner "Telegram 配置 + 测试"; echo
+    echo -e "  TOKEN:${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}  CHAT_ID:${TG_CHAT_ID:-未设置}"
     echo -e "  ${CB}c${C0}) 配置 Token / Chat ID   ${CB}t${C0}) 测试推送   ${CB}b${C0}) 返回"
     read -rp "选择: " s
     case "$s" in c) tg_config; pause ;; t) tg_test; pause ;; b|"") break ;; esac
@@ -653,12 +652,16 @@ do_daemon(){
 # =============================================================
 #  菜单
 # =============================================================
-banner(){
-  echo -e "${CB}${CC}"
-  echo "  ╔══════════════════════════════════════╗"
-  echo "  ║   NAT 零常驻拉取监控   v${VER}          ║"
-  echo "  ╚══════════════════════════════════════╝"
-  echo -e "${C0}${CGRY}  被控机零进程零落地 · 主控 SSH 拉取 · 离线 TG 告警${C0}"
+banner(){   # $1 = 可选副标题(子菜单名)
+  echo
+  echo -e "${CC}  ────────────────────────────────────────${C0}"
+  echo -e "${CB}${CC}  NAT 零常驻拉取监控${C0}   ${CGRY}v${VER}${C0}"
+  if [ -n "$1" ]; then
+    echo -e "${CB}  › $1${C0}"
+  else
+    echo -e "${CGRY}  被控零落地 · 主控 SSH 拉取 · 离线 TG 告警${C0}"
+  fi
+  echo -e "${CC}  ────────────────────────────────────────${C0}"
 }
 
 menu(){
@@ -685,7 +688,7 @@ menu(){
       2) do_status; pause ;;
       3)
         while true; do
-          cls; node_list; echo
+          cls; banner "节点管理"; echo; node_list; echo
           echo -e "  ${CB}a${C0}) 添加  ${CB}e${C0}) 改备注  ${CB}d${C0}) 删除  ${CB}b${C0}) 返回"
           read -rp "选择: " s
           case "$s" in a) node_add; pause ;; e) node_set_remark; pause ;; d) node_del; pause ;; b|"") break ;; esac
@@ -695,7 +698,7 @@ menu(){
       6) cron_remove; pause ;;
       7)
         while true; do
-          cls
+          cls; banner "被控机功能"; echo
           echo -e "  ${CB}v${C0}) 查看本机状态  ${CB}k${C0}) 安装受限监控公钥  ${CB}b${C0}) 返回"
           read -rp "选择: " s
           case "$s" in v) do_local; pause ;; k) node_key_menu ;; b|"") break ;; esac
