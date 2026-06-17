@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================
-#  nat-monitor.sh  —  零常驻 + 私有拉取式 NAT 监控
+#  VolMon.sh  —  零常驻 + 私有拉取式 NAT 监控
 #  主控机定时 SSH 进被控机执行内嵌采集脚本,被控机不留任何进程/文件
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.0"
+VER="1.2.1"
 
 # ---------- 路径 ----------
 BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
@@ -285,7 +285,7 @@ do_local(){
 #        该公钥只能触发只读采集脚本,无法取得 shell 或做任何其他操作。
 #        兼容 OpenSSH 与 Dropbear(OpenWrt)。
 # =============================================================
-agent_collect_path(){
+node_collect_path(){
   local d
   for d in /usr/local/bin /usr/bin /opt; do
     if mkdir -p "$d" 2>/dev/null && [ -w "$d" ]; then echo "$d/volmon-collect"; return; fi
@@ -293,20 +293,20 @@ agent_collect_path(){
   echo "$HOME/.volmon-collect"
 }
 
-agent_write_collector(){
+node_write_collector(){
   local p=$1
   { echo '#!/bin/sh'; printf '%s\n' "$COLLECTOR"; } > "$p" || return 1
   chmod 755 "$p"
 }
 
-agent_install_pubkey(){
+node_install_pubkey(){
   local pub="$1"
   case "$pub" in
     ssh-ed25519\ *|ssh-rsa\ *|ecdsa-*\ *|sk-*\ *) : ;;
     *) echo -e "${CR}公钥格式不对,应以 ssh-ed25519 / ssh-rsa 等开头${C0}"; return 1 ;;
   esac
-  local cp; cp=$(agent_collect_path)
-  agent_write_collector "$cp" || { echo -e "${CR}无法写入采集脚本到 $cp${C0}"; return 1; }
+  local cp; cp=$(node_collect_path)
+  node_write_collector "$cp" || { echo -e "${CR}无法写入采集脚本到 $cp${C0}"; return 1; }
   local sshdir="$HOME/.ssh" ak="$HOME/.ssh/authorized_keys"
   mkdir -p "$sshdir"; chmod 700 "$sshdir"
   touch "$ak"; chmod 600 "$ak"
@@ -325,7 +325,7 @@ agent_install_pubkey(){
   echo -e "${CGRY}主控侧:用对应私钥添加节点即可拉取(host 填本机 DDNS 域名)${C0}"
 }
 
-agent_key_menu(){
+node_key_menu(){
   load_conf
   while true; do
     echo
@@ -340,7 +340,7 @@ agent_key_menu(){
         echo -e "${CGRY}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${C0}"
         read -r pub
         [ -z "$pub" ] && { echo "取消"; continue; }
-        agent_install_pubkey "$pub" ;;
+        node_install_pubkey "$pub" ;;
       2)
         if ! command -v ssh-keygen >/dev/null 2>&1; then
           echo -e "${CR}本机无 ssh-keygen(OpenWrt/Dropbear 常见)。请改用方式 1,在主控生成后粘贴公钥。${C0}"
@@ -348,7 +348,7 @@ agent_key_menu(){
         fi
         local tmp; tmp=$(mktemp -u "${TMPDIR:-/tmp}/volmon_key.XXXXXX")
         ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { echo -e "${CR}生成失败${C0}"; continue; }
-        agent_install_pubkey "$(cat "$tmp.pub")"
+        node_install_pubkey "$(cat "$tmp.pub")"
         echo
         echo -e "${CY}===== 以下私钥请复制到【主控】(菜单9导入),然后从本机抹除 =====${C0}"
         cat "$tmp"
@@ -680,7 +680,7 @@ menu(){
           echo
           echo -e "  ${CB}v${C0}) 查看本机状态  ${CB}k${C0}) 安装受限监控公钥  ${CB}b${C0}) 返回"
           read -rp "选择: " s
-          case "$s" in v) do_local ;; k) agent_key_menu ;; b|"") break ;; esac
+          case "$s" in v) do_local ;; k) node_key_menu ;; b|"") break ;; esac
         done ;;
       8) do_daemon ;;
       9) key_menu ;;
@@ -699,20 +699,20 @@ case "${1:-}" in
   status)  do_status ;;
   local)   do_local ;;
   key)     load_conf; key_menu ;;
-  agent-key) load_conf; agent_key_menu ;;
+  node-key) load_conf; node_key_menu ;;
   daemon)  do_daemon ;;
   shortcut) shortcut_install ;;
   test-tg) load_conf; tg_test ;;
   ""|menu) menu ;;
   -h|--help|help)
-    echo "用法: $0 [run|status|local|daemon|test-tg|agent-key|shortcut|menu]"
+    echo "用法: $0 [run|status|local|daemon|test-tg|node-key|shortcut|menu]"
     echo "  无参数        进入交互菜单"
     echo "  run           拉取一次所有节点(供 cron 调用)"
     echo "  status        显示本地快照状态总览(最后检测/在线)"
     echo "  local         显示本机状态(被控机本地查看)"
     echo "  daemon        前台循环轮询"
     echo "  test-tg       Telegram 推送测试"
-    echo "  agent-key     被控机:安装受限监控公钥"
+    echo "  node-key     被控机:安装受限监控公钥"
     echo "  shortcut      安装 volmon 快捷命令"
     ;;
   *) echo "未知命令: $1 (用 $0 --help)"; exit 1 ;;
