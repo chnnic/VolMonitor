@@ -5,7 +5,11 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.4"
+VER="1.2.5"
+
+# ---------- 更新源 ----------
+REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
+SELF_FILE="VolMon.sh"
 
 # ---------- 路径 ----------
 BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
@@ -596,6 +600,44 @@ tg_menu(){
 # =============================================================
 self_path(){ readlink -f "$0" 2>/dev/null || echo "$PWD/$(basename "$0")"; }
 
+do_update(){
+  local url="$REPO_RAW/$SELF_FILE" self tmp newver
+  self=$(self_path)
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    echo -e "${CR}需要 curl 或 wget 才能更新${C0}"; return 1
+  fi
+  tmp=$(mktemp)
+  echo -e "${CGRY}下载: $url${C0}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --max-time 30 "$url" -o "$tmp" || { echo -e "${CR}下载失败${C0}"; rm -f "$tmp"; return 1; }
+  else
+    wget -qO "$tmp" "$url" || { echo -e "${CR}下载失败${C0}"; rm -f "$tmp"; return 1; }
+  fi
+  # 完整性校验:必须是脚本且语法正确
+  head -1 "$tmp" | grep -q '^#!' || { echo -e "${CR}下载内容异常(非脚本),已放弃${C0}"; rm -f "$tmp"; return 1; }
+  bash -n "$tmp" 2>/dev/null || { echo -e "${CR}远程脚本语法检查未通过,已放弃${C0}"; rm -f "$tmp"; return 1; }
+  newver=$(sed -n 's/^VER="\([^"]*\)".*/\1/p' "$tmp" | head -1)
+  [ -z "$newver" ] || ! grep -q 'VolMonitor\|nat-monitor\|零常驻' "$tmp" \
+    && { [ -z "$newver" ] && { echo -e "${CR}无法识别远程版本,已放弃${C0}"; rm -f "$tmp"; return 1; }; }
+  echo -e "  本地: ${CC}v$VER${C0}   远程: ${CC}v$newver${C0}"
+  if [ "$newver" = "$VER" ]; then
+    read -rp "已是最新,仍强制覆盖? [y/N]: " yn
+    case "$yn" in y|Y) : ;; *) rm -f "$tmp"; echo "已取消"; return ;; esac
+  else
+    read -rp "更新到 v$newver? [Y/n]: " yn
+    case "$yn" in n|N) rm -f "$tmp"; echo "已取消"; return ;; esac
+  fi
+  cp "$self" "$self.bak" 2>/dev/null && echo -e "${CGRY}已备份旧版: $self.bak${C0}"
+  if cat "$tmp" > "$self" 2>/dev/null; then
+    chmod +x "$self" 2>/dev/null; rm -f "$tmp"
+    echo -e "${CG}已更新到 v$newver,请重新运行脚本${C0}"
+    exit 0
+  else
+    echo -e "${CR}写入失败(可能无权限)。可手动: sudo cp $tmp $self${C0}"
+    return 1
+  fi
+}
+
 shortcut_install(){
   local self target="/usr/local/bin/volmon"
   self=$(self_path)
@@ -680,6 +722,7 @@ menu(){
     echo -e "  ${CB}8${C0}) 前台 daemon 轮询"
     echo -e "  ${CB}9${C0}) 密钥管理(导入 / 列出 / 删除)"
     echo -e "  ${CB}s${C0}) 安装启动快捷命令 volmon"
+    echo -e "  ${CB}u${C0}) 检查更新(从 GitHub)"
     echo -e "  ${CB}0${C0}) 退出"
     echo
     read -rp "选择: " ch
@@ -706,6 +749,7 @@ menu(){
       8) do_daemon ;;
       9) key_menu ;;
       s|S) shortcut_install; pause ;;
+      u|U) do_update; pause ;;
       0|q) exit 0 ;;
       *) echo -e "${CR}无效选择${C0}"; pause ;;
     esac
@@ -723,10 +767,11 @@ case "${1:-}" in
   node-key) load_conf; node_key_menu ;;
   daemon)  do_daemon ;;
   shortcut) shortcut_install ;;
+  update|upgrade) do_update ;;
   test-tg) load_conf; tg_test ;;
   ""|menu) menu ;;
   -h|--help|help)
-    echo "用法: $0 [run|status|local|daemon|test-tg|node-key|shortcut|menu]"
+    echo "用法: $0 [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]"
     echo "  无参数        进入交互菜单"
     echo "  run           拉取一次所有节点(供 cron 调用)"
     echo "  status        显示本地快照状态总览(最后检测/在线)"
@@ -735,6 +780,7 @@ case "${1:-}" in
     echo "  test-tg       Telegram 推送测试"
     echo "  node-key     被控机:安装受限监控公钥"
     echo "  shortcut      安装 volmon 快捷命令"
+    echo "  update        从 GitHub 更新到最新版"
     ;;
   *) echo "未知命令: $1 (用 $0 --help)"; exit 1 ;;
 esac
