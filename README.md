@@ -57,6 +57,7 @@ VolMonitor 把方向反过来:
 - **DDNS 友好**:节点主机字段可直接填 DDNS 域名,后端 IP 变化无影响。
 - **Telegram 测试**:普通 / 模拟离线 / 模拟恢复 三种推送预览。
 - **快捷命令**:一键安装 `volmon` 全局命令。
+- **自更新**:从 GitHub 一键拉取最新版,自动校验 + 备份旧版。
 - **跨平台采集**:Debian / Ubuntu / Alpine / OpenWrt 通用。
 
 ---
@@ -158,7 +159,7 @@ command="/usr/local/bin/volmon-collect",no-port-forwarding,no-agent-forwarding,n
 ### VolMon.sh(主控)
 
 ```
-VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|menu]
+VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]
 ```
 
 | 命令 | 说明 |
@@ -171,13 +172,14 @@ VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|menu]
 | `test-tg` | Telegram 推送测试 |
 | `node-key` | 被控机:安装 / 卸载受限监控公钥 |
 | `shortcut` | 安装 `volmon` 快捷命令 |
+| `update` | 从 GitHub 更新到最新版 |
 
-交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `0` 退出
+交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `u` 检查更新 · `0` 退出
 
 ### volmon-node.sh(被控)
 
 ```
-volmon-node.sh [add ["公钥"]|gen|status|remove|menu]
+volmon-node.sh [add ["公钥"]|gen|status|remove|update|menu]
 ```
 
 | 命令 | 说明 |
@@ -186,6 +188,7 @@ volmon-node.sh [add ["公钥"]|gen|status|remove|menu]
 | `gen` | 本机生成密钥对并安装受限公钥,打印私钥给主控 |
 | `status` | 查看本机状态 |
 | `remove` | 卸载受限公钥与采集脚本 |
+| `update` | 从 GitHub 更新到最新版 |
 | *(无参数)* | 进入交互菜单 |
 
 ---
@@ -260,6 +263,25 @@ nat-home|nat.example.xyz|2222|root|/root/.nat-monitor/keys/hk.key|香港家宽
 
 ```bash
 ./VolMon.sh daemon
+```
+
+---
+
+## 更新
+
+从 GitHub 拉取最新版,自动校验(脚本 + 语法)、比对版本、备份旧版后原地替换:
+
+```bash
+./VolMon.sh update          # 主控
+./volmon-node.sh update     # 被控;菜单内选 u 亦可
+```
+
+- 远程版本不同 → 显示 `本地 vX → 远程 vY`,确认后更新;已是最新则默认跳过。
+- 更新前自动备份为 `脚本名.bak`;写入需要对脚本文件有写权限(必要时用 `sudo`)。
+- 更新源可用环境变量覆盖(换分支 / 镜像):
+
+```bash
+VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.sh update
 ```
 
 ---
