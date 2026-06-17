@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.1"
+VER="1.2.2"
 
 # ---------- 路径 ----------
 BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
@@ -23,6 +23,9 @@ if [ -t 1 ]; then
 else
   C0=''; CB=''; CR=''; CG=''; CY=''; CC=''; CGRY=''
 fi
+
+cls(){ [ -t 1 ] && { clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }; }
+pause(){ [ -t 0 ] && { printf "\n${CGRY}按回车返回...${C0}"; read -r _; }; }
 
 # =============================================================
 #  内嵌采集脚本(在被控机上以 sh 执行,POSIX 兼容,无落地)
@@ -328,7 +331,7 @@ node_install_pubkey(){
 node_key_menu(){
   load_conf
   while true; do
-    echo
+    cls
     echo -e "${CB}被控机 · 受限监控公钥${C0}"
     echo -e "  ${CB}1${C0}) 粘贴主控公钥并安装(推荐,私钥不离开主控)"
     echo -e "  ${CB}2${C0}) 本机生成密钥对(打印私钥转交主控)"
@@ -339,15 +342,15 @@ node_key_menu(){
       1)
         echo -e "${CGRY}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${C0}"
         read -r pub
-        [ -z "$pub" ] && { echo "取消"; continue; }
-        node_install_pubkey "$pub" ;;
+        [ -z "$pub" ] && { echo "取消"; pause; continue; }
+        node_install_pubkey "$pub"; pause ;;
       2)
         if ! command -v ssh-keygen >/dev/null 2>&1; then
           echo -e "${CR}本机无 ssh-keygen(OpenWrt/Dropbear 常见)。请改用方式 1,在主控生成后粘贴公钥。${C0}"
-          continue
+          pause; continue
         fi
         local tmp; tmp=$(mktemp -u "${TMPDIR:-/tmp}/volmon_key.XXXXXX")
-        ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { echo -e "${CR}生成失败${C0}"; continue; }
+        ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { echo -e "${CR}生成失败${C0}"; pause; continue; }
         node_install_pubkey "$(cat "$tmp.pub")"
         echo
         echo -e "${CY}===== 以下私钥请复制到【主控】(菜单9导入),然后从本机抹除 =====${C0}"
@@ -355,12 +358,12 @@ node_key_menu(){
         echo -e "${CY}================================================================${C0}"
         shred -u "$tmp" 2>/dev/null || rm -f "$tmp"
         rm -f "$tmp.pub"
-        echo -e "${CGRY}本机私钥已删除,只保留受限公钥${C0}" ;;
+        echo -e "${CGRY}本机私钥已删除,只保留受限公钥${C0}"; pause ;;
       u)
         local ak="$HOME/.ssh/authorized_keys"
         [ -f "$ak" ] && { grep -v 'volmon-collect' "$ak" > "$ak.tmp" 2>/dev/null; mv "$ak.tmp" "$ak"; chmod 600 "$ak"; }
         rm -f /usr/local/bin/volmon-collect /usr/bin/volmon-collect /opt/volmon-collect "$HOME/.volmon-collect" 2>/dev/null
-        echo -e "${CG}已移除受限公钥行与采集脚本${C0}" ;;
+        echo -e "${CG}已移除受限公钥行与采集脚本${C0}"; pause ;;
       b|"") break ;;
     esac
   done
@@ -440,20 +443,20 @@ key_del(){
 
 key_menu(){
   while true; do
-    echo; key_list; echo
+    cls; key_list; echo
     echo -e "  ${CB}i${C0}) 导入  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
     read -rp "选择: " s
     case "$s" in
-      i) key_import ;;
-      d) key_del ;;
+      i) key_import; pause ;;
+      d) key_del; pause ;;
       g)
         key_list
         read -rp "设为全局默认的密钥名称: " kn
         [ -z "$kn" ] && continue
         local f; f=$(key_path "$kn")
-        [ -f "$f" ] || { echo -e "${CR}未找到${C0}"; continue; }
+        [ -f "$f" ] || { echo -e "${CR}未找到${C0}"; pause; continue; }
         kv_set "$CONF" SSH_KEY "\"$f\""; . "$CONF"
-        echo -e "${CG}全局默认密钥已设为: $f${C0}" ;;
+        echo -e "${CG}全局默认密钥已设为: $f${C0}"; pause ;;
       b|"") break ;;
     esac
   done
@@ -566,11 +569,11 @@ tg_test(){
 tg_menu(){
   while true; do
     load_conf
-    echo
+    cls
     echo -e "${CB}Telegram${C0}  TOKEN:${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}  CHAT_ID:${TG_CHAT_ID:-未设置}"
     echo -e "  ${CB}c${C0}) 配置 Token / Chat ID   ${CB}t${C0}) 测试推送   ${CB}b${C0}) 返回"
     read -rp "选择: " s
-    case "$s" in c) tg_config ;; t) tg_test ;; b|"") break ;; esac
+    case "$s" in c) tg_config; pause ;; t) tg_test; pause ;; b|"") break ;; esac
   done
 }
 
@@ -646,7 +649,7 @@ banner(){
 menu(){
   load_conf
   while true; do
-    echo
+    cls
     banner
     echo
     echo -e "  ${CB}1${C0}) 拉取一次并显示所有节点状态"
@@ -663,30 +666,30 @@ menu(){
     echo
     read -rp "选择: " ch
     case "$ch" in
-      1) VERBOSE=1 do_run ;;
-      2) do_status ;;
+      1) VERBOSE=1 do_run; pause ;;
+      2) do_status; pause ;;
       3)
         while true; do
-          echo; node_list; echo
+          cls; node_list; echo
           echo -e "  ${CB}a${C0}) 添加  ${CB}e${C0}) 改备注  ${CB}d${C0}) 删除  ${CB}b${C0}) 返回"
           read -rp "选择: " s
-          case "$s" in a) node_add ;; e) node_set_remark ;; d) node_del ;; b|"") break ;; esac
+          case "$s" in a) node_add; pause ;; e) node_set_remark; pause ;; d) node_del; pause ;; b|"") break ;; esac
         done ;;
       4) tg_menu ;;
-      5) cron_install ;;
-      6) cron_remove ;;
+      5) cron_install; pause ;;
+      6) cron_remove; pause ;;
       7)
         while true; do
-          echo
+          cls
           echo -e "  ${CB}v${C0}) 查看本机状态  ${CB}k${C0}) 安装受限监控公钥  ${CB}b${C0}) 返回"
           read -rp "选择: " s
-          case "$s" in v) do_local ;; k) node_key_menu ;; b|"") break ;; esac
+          case "$s" in v) do_local; pause ;; k) node_key_menu ;; b|"") break ;; esac
         done ;;
       8) do_daemon ;;
       9) key_menu ;;
-      s|S) shortcut_install ;;
+      s|S) shortcut_install; pause ;;
       0|q) exit 0 ;;
-      *) echo -e "${CR}无效选择${C0}" ;;
+      *) echo -e "${CR}无效选择${C0}"; pause ;;
     esac
   done
 }
