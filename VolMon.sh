@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.2"
+VER="1.2.3"
 
 # ---------- 路径 ----------
 BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
@@ -482,6 +482,12 @@ node_add(){
   read -rp "SSH 用户 [root]: " u; u=${u:-root}
   echo -e "${CGRY}SSH 私钥: 留空=用全局默认;或输入下方已导入的密钥名;或输入文件路径${C0}"
   key_list
+  if ! ls "$KEYS_DIR"/*.key >/dev/null 2>&1; then
+    local gk="${SSH_KEY/#\~/$HOME}"
+    [ -n "$gk" ] && [ -f "$gk" ] \
+      && echo -e "${CGRY}  (尚未导入密钥;留空将使用全局默认 ${gk})${C0}" \
+      || echo -e "${CY}  尚未导入任何密钥。可先到菜单 9 导入主控私钥,或在此直接填私钥文件路径。${C0}"
+  fi
   read -rp "密钥(名称/路径/空): " k
   k=$(resolve_key "$k")
   [ -z "$n" ] || [ -z "$h" ] && { echo -e "${CR}名称和主机不能为空${C0}"; return; }
@@ -489,6 +495,15 @@ node_add(){
   if grep -q "^$n|" "$NODES" 2>/dev/null; then echo -e "${CR}已存在同名节点${C0}"; return; fi
   echo "$n|$h|$p|$u|$k|$rmk" >> "$NODES"
   echo -e "${CG}已添加: ${rmk} [$n]  ($h:$p, key=${k:-全局默认})${C0}"
+  # 校验该节点实际使用的密钥是否存在,不存在则提醒
+  local eff="$k"
+  [ -z "$eff" ] && eff="${SSH_KEY/#\~/$HOME}"
+  if [ -z "$eff" ]; then
+    echo -e "${CY}⚠ 未指定密钥且无全局默认密钥。请到菜单 9 导入主控私钥,或为本节点指定密钥。${C0}"
+  elif [ ! -f "$eff" ]; then
+    echo -e "${CY}⚠ 密钥文件不存在: ${eff}${C0}"
+    echo -e "${CGRY}  → 到菜单 9「密钥管理」导入私钥(导入后可在此填密钥名或设为全局默认),否则拉取会失败。${C0}"
+  fi
 }
 
 node_set_remark(){
