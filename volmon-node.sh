@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.0"
+VER="1.0.1"
 
 # ---------- 颜色 ----------
 if [ -t 1 ]; then
@@ -14,6 +14,8 @@ else
   N=''; B=''; R=''; G=''; Y=''; C=''; GR=''
 fi
 say(){ printf '%b\n' "$*"; }
+cls(){ [ -t 1 ] && { clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }; }
+pause(){ [ -t 0 ] && { printf "\n${GR}按回车返回...${N}"; read -r _; }; }
 
 # =============================================================
 #  只读采集脚本(与主控内嵌版一致;POSIX sh)
@@ -157,7 +159,7 @@ EOF
 # =============================================================
 menu(){
   while :; do
-    echo
+    cls
     say "${B}${C}  VolMonitor 被控机助手  v${VER}${N}"
     say "${GR}  安装受限监控公钥 · 被控端零常驻${N}"
     echo
@@ -172,13 +174,13 @@ menu(){
       1)
         say "${GR}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${N}"
         read -r pub
-        [ -z "$pub" ] && { say "取消"; continue; }
-        install_pubkey "$pub" ;;
-      2) gen_key ;;
-      3) do_local ;;
-      4) uninstall ;;
+        [ -z "$pub" ] && { say "取消"; pause; continue; }
+        install_pubkey "$pub"; pause ;;
+      2) gen_key; pause ;;
+      3) do_local; pause ;;
+      4) uninstall; pause ;;
       0|q) exit 0 ;;
-      *) say "${R}无效选择${N}" ;;
+      *) say "${R}无效选择${N}"; pause ;;
     esac
   done
 }
