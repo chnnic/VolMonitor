@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.1"
+VER="1.3.2"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -223,12 +223,12 @@ process_node(){
     kv_set "$f" LASTSEEN "$(date '+%F %T')"
     printf '%s\n' "$out" > "$(snap_file "$name")"
     if [ "$prev" = "DOWN" ]; then
-      kv_set "$f" STATUS UP
       tg_send "$(printf '✅ <b>%s</b> 已恢复在线\n主机: %s\n时间: %s' \
         "$label" "$host:${port:-22}" "$(date '+%F %T %Z')")"
       log "RECOVER $name"
       [ "$VERBOSE" = "1" ] && echo -e "  ${CG}↑ 已恢复,发送恢复通知${C0}"
     fi
+    kv_set "$f" STATUS UP
     metric_alerts "$label" "$out" "$f"
     [ "$VERBOSE" = "1" ] && { echo -e "${CB}● ${CG}$remark${C0} ${CGRY}[$name] ($host)${C0}"; render_one "$name" "$out"; }
   else
@@ -273,10 +273,19 @@ show_one_status(){
   f=$(st_file "$name")
   status=$(kv_get "$f" STATUS); fails=$(kv_get "$f" FAILS)
   last=$(kv_get "$f" LASTSEEN); check=$(kv_get "$f" LASTCHECK)
+  # 兼容旧状态文件:STATUS 为空时,凭最近一次成功记录推断
+  if [ -z "$status" ]; then
+    if [ -n "$last" ] && [ "${fails:-0}" = "0" ]; then status="UP"
+    elif [ -z "$check" ]; then status="未检测"
+    else status="未知"; fi
+  fi
   local dot color
-  if [ -z "$status" ]; then dot="○"; color=$CGRY; status="未检测"
-  elif [ "$status" = "DOWN" ]; then dot="●"; color=$CR
-  else dot="●"; color=$CG; fi
+  case "$status" in
+    UP)     dot="●"; color=$CG ;;
+    DOWN)   dot="●"; color=$CR ;;
+    未检测) dot="○"; color=$CGRY ;;
+    *)      dot="○"; color=$CY ;;
+  esac
   echo -e "${color}${dot}${C0} ${CB}${remark}${C0} ${CGRY}[${name}] (${host}:${port:-22})${C0}  状态:${color}${status}${C0}"
   echo -e "   ${CGRY}最后检测:${check:-无}  |  最后在线:${last:-无}  |  连续失败:${fails:-0}${C0}"
   snap=$(snap_file "$name")
