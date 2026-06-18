@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.0"
+VER="1.3.1"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -441,7 +441,7 @@ detect_pub_ip(){
   local u ip
   for u in https://api.ipify.org https://ifconfig.me/ip https://ip.sb https://ipinfo.io/ip; do
     if command -v curl >/dev/null 2>&1; then
-      ip=$(curl -fsS --max-time 5 "$u" 2>/dev/null | tr -d '[:space:]')
+      ip=$(curl -fsS --max-time 4 "$u" 2>/dev/null | tr -d '[:space:]')
     elif command -v wget >/dev/null 2>&1; then
       ip=$(wget -qO- "$u" 2>/dev/null | tr -d '[:space:]')
     fi
@@ -452,7 +452,54 @@ detect_pub_ip(){
   return 1
 }
 
-# 新建密钥对(私钥存 keys/,打印公钥供被控机安装);成功经 GEN_KEY_PATH 返回路径
+# 由密钥路径取公钥:优先 .pub,否则用 ssh-keygen -y 从私钥派生
+pubkey_of(){
+  local kf=$1
+  [ -z "$kf" ] && return 1
+  if [ -f "$kf.pub" ]; then cat "$kf.pub"; return 0; fi
+  if command -v ssh-keygen >/dev/null 2>&1 && [ -f "$kf" ]; then
+    ssh-keygen -y -f "$kf" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+# 询问来源 IP 限制(探测+确认),结果存全局 FROM_IP
+ask_from_ip(){
+  FROM_IP=""
+  echo -e "${CGRY}探测主控公网 IP...${C0}"
+  local detected; detected=$(detect_pub_ip)
+  echo -e "  主控公网 IP: ${CC}${detected:-未检测到}${C0}"
+  local ans
+  read -rp "限制被控仅此 IP 访问(回车=检测值;输入 IP/CIDR/逗号列表;no=不限制): " ans
+  case "$ans" in
+    no|NO|n|N) FROM_IP="" ;;
+    "") FROM_IP="$detected" ;;
+    *) FROM_IP="$ans" ;;
+  esac
+}
+
+# 打印被控一键安装命令($1=公钥 $2=来源IP $3=节点名(给出则存盘))
+print_node_install(){
+  local pub=$1 fromip=$2 name=$3 fromarg=""
+  [ -n "$fromip" ] && fromarg=" \"$fromip\""
+  echo -e "${CB}被控机安装(任选其一,直接在被控机执行):${C0}"
+  echo -e "${CY}① 一键拉取并安装(curl):${C0}"
+  echo -e "   curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
+  echo -e "${CY}② 一键拉取并安装(wget):${C0}"
+  echo -e "   wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
+  echo -e "${CY}③ 已有 volmon-node.sh 时:${C0}"
+  echo -e "   ./volmon-node.sh add \"$pub\"$fromarg"
+  if [ -n "$name" ]; then
+    local cmdf="$BASE_DIR/install-$name.txt"
+    {
+      echo "# 被控机安装命令(任选其一)"
+      echo "curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
+      echo "wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
+    } > "$cmdf" 2>/dev/null && echo -e "${CGRY}(命令已存到 $cmdf)${C0}"
+  fi
+}
+
+# 新建密钥对(私钥存 keys/,打印公钥+一键命令);成功经 GEN_KEY_PATH 返回路径
 key_generate(){
   load_conf
   GEN_KEY_PATH=""
@@ -472,37 +519,13 @@ key_generate(){
   chmod 600 "$f"
   GEN_KEY_PATH="$f"
   local pub; pub=$(cat "$f.pub")
-  # 来源 IP 限制
-  echo -e "${CGRY}探测主控公网 IP...${C0}"
-  local detected fromip ans
-  detected=$(detect_pub_ip)
-  echo -e "  检测到主控公网 IP: ${CC}${detected:-未检测到}${C0}"
-  read -rp "限制被控仅接受此 IP 访问(回车=用检测值;输入其他IP/CIDR/逗号列表;输入 no 不限制): " ans
-  case "$ans" in
-    no|NO|n|N) fromip="" ;;
-    "") fromip="$detected" ;;
-    *) fromip="$ans" ;;
-  esac
-  local fromarg=""
-  [ -n "$fromip" ] && fromarg=" \"$fromip\""
+  ask_from_ip
   echo -e "${CG}已生成密钥对: $f${C0}"
   echo -e "${CGRY}私钥留在主控用于拉取;被控机装下面这把公钥即可。${C0}"
   echo -e "${CC}公钥:${C0} $pub"
-  [ -n "$fromip" ] && echo -e "${CC}来源限制:${C0} from=\"$fromip\"  ${CGRY}(仅此 IP 能用此钥,泄露也无法他用)${C0}"
+  [ -n "$FROM_IP" ] && echo -e "${CC}来源限制:${C0} from=\"$FROM_IP\"  ${CGRY}(仅此 IP 能用此钥)${C0}"
   echo
-  echo -e "${CB}被控机安装(任选其一,直接在被控机执行):${C0}"
-  echo -e "${CY}① 一键拉取并安装(curl):${C0}"
-  echo -e "   curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
-  echo -e "${CY}② 一键拉取并安装(wget):${C0}"
-  echo -e "   wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
-  echo -e "${CY}③ 已有 volmon-node.sh 时:${C0}"
-  echo -e "   ./volmon-node.sh add \"$pub\"$fromarg"
-  local cmdf="$BASE_DIR/install-$kn.txt"
-  {
-    echo "# 被控机安装命令(任选其一)"
-    echo "curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
-    echo "wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
-  } > "$cmdf" 2>/dev/null && echo -e "${CGRY}(命令已存到 $cmdf)${C0}"
+  print_node_install "$pub" "$FROM_IP" "$kn"
   return 0
 }
 
@@ -565,6 +588,7 @@ resolve_key(){
 # =============================================================
 node_add(){
   load_conf
+  GEN_KEY_PATH=""
   read -rp "节点名称(唯一标识,英文/数字): " n
   read -rp "备注名(中文友好名,推送显示,留空=同节点名): " rmk
   read -rp "DDNS 域名 / Tailscale IP / 主机: " h
@@ -599,6 +623,18 @@ node_add(){
   elif [ ! -f "$eff" ]; then
     echo -e "${CY}⚠ 密钥文件不存在: ${eff}${C0}"
     echo -e "${CGRY}  → 到菜单 9「密钥管理」导入私钥(导入后可在此填密钥名或设为全局默认),否则拉取会失败。${C0}"
+  fi
+  # 若用的是「已存在的密钥」(非刚 new 生成,key_generate 已自带提示),也给出被控一键安装命令
+  if [ -n "$eff" ] && [ -f "$eff" ] && [ "$k" != "$GEN_KEY_PATH" ]; then
+    local pub; pub=$(pubkey_of "$eff")
+    if [ -n "$pub" ]; then
+      echo
+      ask_from_ip
+      echo
+      print_node_install "$pub" "$FROM_IP" "$n"
+    else
+      echo -e "${CGRY}(无法从该密钥导出公钥,跳过被控一键命令;.pub 缺失且 ssh-keygen 不可用)${C0}"
+    fi
   fi
 }
 
