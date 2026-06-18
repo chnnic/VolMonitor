@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.2"
+VER="1.3.3"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -839,7 +839,7 @@ do_daemon(){
 banner(){   # $1 = 可选副标题(子菜单名)
   echo
   echo -e "${CC}  ────────────────────────────────────────${C0}"
-  echo -e "${CB}${CC}  NAT 零常驻拉取监控${C0}   ${CGRY}v${VER}${C0}"
+  echo -e "${CB}${CC}  VolMonitor 零常驻拉取监控${C0}   ${CGRY}v${VER}${C0}"
   if [ -n "$1" ]; then
     echo -e "${CB}  › $1${C0}"
   else
