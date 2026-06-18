@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.6"
+VER="1.2.7"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -646,8 +646,12 @@ do_update(){
   cp "$self" "$self.bak" 2>/dev/null && echo -e "${CGRY}已备份旧版: $self.bak${C0}"
   if cat "$tmp" > "$self" 2>/dev/null; then
     chmod +x "$self" 2>/dev/null; rm -f "$tmp"
-    echo -e "${CG}已更新到 v$newver,请重新运行脚本${C0}"
-    exit 0
+    echo -e "${CG}已更新到 v$newver${C0}"
+    if [ -t 0 ] && [ -t 1 ]; then
+      echo -e "${CGRY}正在以新版本重新启动...${C0}"; sleep 1
+      exec "$self"
+    fi
+    echo -e "${CGRY}请重新运行脚本${C0}"; exit 0
   else
     echo -e "${CR}写入失败(可能无权限)。可手动: sudo cp $tmp $self${C0}"
     return 1
