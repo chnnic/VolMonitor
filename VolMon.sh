@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.9"
+VER="1.3.0"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -436,6 +436,22 @@ key_import(){
   fi
 }
 
+# 探测主控公网 IP(被控将看到的来源 IP)
+detect_pub_ip(){
+  local u ip
+  for u in https://api.ipify.org https://ifconfig.me/ip https://ip.sb https://ipinfo.io/ip; do
+    if command -v curl >/dev/null 2>&1; then
+      ip=$(curl -fsS --max-time 5 "$u" 2>/dev/null | tr -d '[:space:]')
+    elif command -v wget >/dev/null 2>&1; then
+      ip=$(wget -qO- "$u" 2>/dev/null | tr -d '[:space:]')
+    fi
+    case "$ip" in
+      *.*.*.*|*:*:*) echo "$ip"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # 新建密钥对(私钥存 keys/,打印公钥供被控机安装);成功经 GEN_KEY_PATH 返回路径
 key_generate(){
   load_conf
@@ -456,23 +472,36 @@ key_generate(){
   chmod 600 "$f"
   GEN_KEY_PATH="$f"
   local pub; pub=$(cat "$f.pub")
+  # 来源 IP 限制
+  echo -e "${CGRY}探测主控公网 IP...${C0}"
+  local detected fromip ans
+  detected=$(detect_pub_ip)
+  echo -e "  检测到主控公网 IP: ${CC}${detected:-未检测到}${C0}"
+  read -rp "限制被控仅接受此 IP 访问(回车=用检测值;输入其他IP/CIDR/逗号列表;输入 no 不限制): " ans
+  case "$ans" in
+    no|NO|n|N) fromip="" ;;
+    "") fromip="$detected" ;;
+    *) fromip="$ans" ;;
+  esac
+  local fromarg=""
+  [ -n "$fromip" ] && fromarg=" \"$fromip\""
   echo -e "${CG}已生成密钥对: $f${C0}"
   echo -e "${CGRY}私钥留在主控用于拉取;被控机装下面这把公钥即可。${C0}"
   echo -e "${CC}公钥:${C0} $pub"
+  [ -n "$fromip" ] && echo -e "${CC}来源限制:${C0} from=\"$fromip\"  ${CGRY}(仅此 IP 能用此钥,泄露也无法他用)${C0}"
   echo
   echo -e "${CB}被控机安装(任选其一,直接在被控机执行):${C0}"
   echo -e "${CY}① 一键拉取并安装(curl):${C0}"
-  echo -e "   curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+  echo -e "   curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
   echo -e "${CY}② 一键拉取并安装(wget):${C0}"
-  echo -e "   wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+  echo -e "   wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
   echo -e "${CY}③ 已有 volmon-node.sh 时:${C0}"
-  echo -e "   ./volmon-node.sh add \"$pub\""
-  # 同时把一键命令写到文件,便于复制
+  echo -e "   ./volmon-node.sh add \"$pub\"$fromarg"
   local cmdf="$BASE_DIR/install-$kn.txt"
   {
     echo "# 被控机安装命令(任选其一)"
-    echo "curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
-    echo "wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+    echo "curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
+    echo "wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\"$fromarg"
   } > "$cmdf" 2>/dev/null && echo -e "${CGRY}(命令已存到 $cmdf)${C0}"
   return 0
 }
