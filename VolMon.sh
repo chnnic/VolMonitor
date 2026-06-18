@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.5"
+VER="1.4.0"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -217,11 +217,24 @@ process_node(){
   kv_set "$f" LASTCHECK "$(date '+%F %T')"
   prev=$(kv_get "$f" STATUS); [ -z "$prev" ] && prev=UP
   fails=$(kv_get "$f" FAILS); [ -z "$fails" ] && fails=0
+  # 日切:跨天则重置当日失败计数与流量基线
+  local today; today=$(date '+%F')
+  if [ "$(kv_get "$f" DAY)" != "$today" ]; then
+    kv_set "$f" DAY "$today"; kv_set "$f" DFAILS 0
+    kv_set "$f" RX_BASE ""; kv_set "$f" TX_BASE ""
+  fi
 
   if [ "$rc" = "0" ] && printf '%s' "$out" | grep -q '^HOST='; then
     kv_set "$f" FAILS 0
     kv_set "$f" LASTSEEN "$(date '+%F %T')"
     printf '%s\n' "$out" > "$(snap_file "$name")"
+    # 记录当日流量(累计字节;基线为当天首次成功值)
+    local curx cutx
+    read -r curx cutx <<EOF
+$(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4} END{printf "%d %d",rx,tx}')
+EOF
+    [ -z "$(kv_get "$f" RX_BASE)" ] && { kv_set "$f" RX_BASE "$curx"; kv_set "$f" TX_BASE "$cutx"; }
+    kv_set "$f" RX_NOW "$curx"; kv_set "$f" TX_NOW "$cutx"
     if [ "$prev" = "DOWN" ]; then
       tg_send "$(printf '✅ <b>%s</b> 已恢复在线\n主机: %s\n时间: %s' \
         "$label" "$host:${port:-22}" "$(date '+%F %T %Z')")"
@@ -234,6 +247,8 @@ process_node(){
   else
     fails=$((fails+1))
     kv_set "$f" FAILS "$fails"
+    local dfails; dfails=$(kv_get "$f" DFAILS); [ -z "$dfails" ] && dfails=0
+    kv_set "$f" DFAILS "$((dfails+1))"
     log "FAIL $name (#$fails) rc=$rc"
     if [ "$fails" -ge "${FAIL_THRESHOLD:-3}" ] && [ "$prev" != "DOWN" ]; then
       kv_set "$f" STATUS DOWN
@@ -365,7 +380,7 @@ node_key_menu(){
     echo -e "  ${CB}2${C0}) 本机生成密钥对(打印私钥转交主控)"
     echo -e "  ${CB}u${C0}) 卸载受限公钥与采集脚本"
     echo -e "  ${CB}b${C0}) 返回"
-    read -rp "选择: " s
+    read -rp "选择: " s || break
     case "$s" in
       1)
         echo -e "${CGRY}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${C0}"
@@ -566,7 +581,7 @@ key_menu(){
   while true; do
     cls; banner "密钥管理"; echo; key_list; echo
     echo -e "  ${CB}i${C0}) 导入  ${CB}n${C0}) 新建密钥对  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
-    read -rp "选择: " s
+    read -rp "选择: " s || break
     case "$s" in
       i) key_import; pause ;;
       n|N) key_generate; pause ;;
@@ -727,9 +742,9 @@ tg_menu(){
     load_conf
     cls; banner "Telegram 配置 + 测试"; echo
     echo -e "  TOKEN:${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}  CHAT_ID:${TG_CHAT_ID:-未设置}"
-    echo -e "  ${CB}c${C0}) 配置 Token / Chat ID   ${CB}t${C0}) 测试推送   ${CB}b${C0}) 返回"
-    read -rp "选择: " s
-    case "$s" in c) tg_config; pause ;; t) tg_test; pause ;; b|"") break ;; esac
+    echo -e "  ${CB}c${C0}) 配置 Token / Chat ID   ${CB}t${C0}) 测试推送   ${CB}r${C0}) 每日日报   ${CB}b${C0}) 返回"
+    read -rp "选择: " s || break
+    case "$s" in c) tg_config; pause ;; t) tg_test; pause ;; r) report_menu ;; b|"") break ;; esac
   done
 }
 
@@ -851,6 +866,89 @@ do_daemon(){
 }
 
 # =============================================================
+#  每日日报:汇总当日流量 / 失败次数等并推送 TG
+# =============================================================
+do_report(){
+  load_conf
+  [ -s "$NODES" ] || { echo "无节点"; return; }
+  local today; today=$(date '+%F')
+  local nodes=0 up=0 down=0 trx=0 ttx=0 tdf=0 lines="" name host port user key remark
+  while IFS='|' read -r name host port user key remark; do
+    [ -z "$name" ] && continue
+    case "$name" in \#*) continue ;; esac
+    [ -z "$remark" ] && remark="$name"
+    nodes=$((nodes+1))
+    local f st df rxb txb rxn txn drx dtx emoji gline
+    f=$(st_file "$name")
+    st=$(kv_get "$f" STATUS)
+    df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
+    rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
+    rxn=$(kv_get "$f" RX_NOW);  txn=$(kv_get "$f" TX_NOW)
+    drx=0; dtx=0
+    if [ -n "$rxn" ] && [ -n "$rxb" ]; then drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; fi
+    if [ -n "$txn" ] && [ -n "$txb" ]; then dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; fi
+    trx=$((trx+drx)); ttx=$((ttx+dtx)); tdf=$((tdf+df))
+    case "$st" in
+      DOWN) emoji="🔴"; down=$((down+1)) ;;
+      UP)   emoji="🟢"; up=$((up+1)) ;;
+      *)    emoji="⚪" ;;
+    esac
+    gline=$(awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+    lines="$lines
+$emoji <b>$remark</b>  今日 $gline  失败 ${df}次"
+  done < "$NODES"
+  local tot; tot=$(awk -v r="$trx" -v t="$ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+  local msg
+  msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d\n合计今日流量 %s · 失败 %d次\n————————————%s' \
+    "$today" "$nodes" "$up" "$down" "$tot" "$tdf" "$lines")
+  [ -t 1 ] && printf '%s\n' "$msg" | sed 's/<[^>]*>//g'
+  if tg_send "$msg"; then log "REPORT sent"; [ -t 1 ] && echo -e "${CG}日报已推送${C0}"
+  else log "REPORT send failed"; [ -t 1 ] && echo -e "${CR}推送失败(检查 TG 配置/网络)${C0}"; fi
+}
+
+report_install(){
+  load_conf
+  local self; self=$(self_path)
+  read -rp "每日日报时间 HH:MM [23:59]: " t; t=${t:-23:59}
+  case "$t" in
+    [0-9]*:[0-9]*) : ;;
+    *) echo -e "${CR}时间格式应为 HH:MM${C0}"; return ;;
+  esac
+  local hh=${t%%:*} mm=${t##*:}
+  hh=$((10#$hh)); mm=$((10#$mm))
+  local line="$mm $hh * * * $self report >/dev/null 2>&1 # volmon-report"
+  ( crontab -l 2>/dev/null | grep -v '# volmon-report'; echo "$line" ) | crontab -
+  kv_set "$CONF" DAILY_REPORT 1
+  echo -e "${CG}已启用每日日报: 每天 $(printf '%02d:%02d' "$hh" "$mm") 推送${C0}"
+  echo -e "${CGRY}(依赖 cron 与已配置的 Telegram)${C0}"
+}
+
+report_remove(){
+  ( crontab -l 2>/dev/null | grep -v '# volmon-report' ) | crontab -
+  kv_set "$CONF" DAILY_REPORT 0
+  echo -e "${CG}已关闭每日日报${C0}"
+}
+
+report_menu(){
+  while true; do
+    load_conf
+    cls; banner "每日日报"
+    local cur; cur=$(crontab -l 2>/dev/null | grep '# volmon-report')
+    echo -e "  当前状态: ${cur:+${CG}已启用${C0}}${cur:-${CGRY}未启用${C0}}"
+    [ -n "$cur" ] && echo -e "  ${CGRY}$(echo "$cur" | awk '{print $2":"$1}' | sed 's/:/ 时 /;s/$/ 分/')${C0}"
+    echo
+    echo -e "  ${CB}e${C0}) 启用 / 设置时间   ${CB}x${C0}) 关闭   ${CB}t${C0}) 立即发送一次   ${CB}b${C0}) 返回"
+    read -rp "选择: " s || break
+    case "$s" in
+      e) report_install; pause ;;
+      x) report_remove; pause ;;
+      t) do_report; pause ;;
+      b|"") break ;;
+    esac
+  done
+}
+
+# =============================================================
 #  菜单
 # =============================================================
 banner(){   # $1 = 可选副标题(子菜单名)
@@ -884,7 +982,7 @@ menu(){
     echo -e "  ${CB}u${C0}) 检查更新(从 GitHub)"
     echo -e "  ${CB}0${C0}) 退出"
     echo
-    read -rp "选择: " ch
+    read -rp "选择: " ch || exit 0
     case "$ch" in
       1) VERBOSE=1 do_run; pause ;;
       2) do_status; pause ;;
@@ -892,7 +990,7 @@ menu(){
         while true; do
           cls; banner "节点管理"; echo; node_list; echo
           echo -e "  ${CB}a${C0}) 添加  ${CB}e${C0}) 改备注  ${CB}d${C0}) 删除  ${CB}b${C0}) 返回"
-          read -rp "选择: " s
+          read -rp "选择: " s || break
           case "$s" in a) node_add; pause ;; e) node_set_remark; pause ;; d) node_del; pause ;; b|"") break ;; esac
         done ;;
       4) tg_menu ;;
@@ -902,7 +1000,7 @@ menu(){
         while true; do
           cls; banner "被控机功能"; echo
           echo -e "  ${CB}v${C0}) 查看本机状态  ${CB}k${C0}) 安装受限监控公钥  ${CB}b${C0}) 返回"
-          read -rp "选择: " s
+          read -rp "选择: " s || break
           case "$s" in v) do_local; pause ;; k) node_key_menu ;; b|"") break ;; esac
         done ;;
       8) do_daemon ;;
@@ -927,16 +1025,18 @@ case "${1:-}" in
   daemon)  do_daemon ;;
   shortcut) shortcut_install ;;
   update|upgrade) do_update ;;
+  report) do_report ;;
   test-tg) load_conf; tg_test ;;
   ""|menu) menu ;;
   -h|--help|help)
-    echo "用法: $0 [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]"
+    echo "用法: $0 [run|status|local|daemon|test-tg|report|node-key|shortcut|update|menu]"
     echo "  无参数        进入交互菜单"
     echo "  run           拉取一次所有节点(供 cron 调用)"
     echo "  status        显示本地快照状态总览(最后检测/在线)"
     echo "  local         显示本机状态(被控机本地查看)"
     echo "  daemon        前台循环轮询"
     echo "  test-tg       Telegram 推送测试"
+    echo "  report        生成并推送当日汇总日报"
     echo "  node-key     被控机:安装受限监控公钥"
     echo "  shortcut      安装 volmon 快捷命令"
     echo "  update        从 GitHub 更新到最新版"
