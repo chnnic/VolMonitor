@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.4"
+VER="1.0.5"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -79,7 +79,7 @@ write_collector(){
 #  安装受限公钥
 # =============================================================
 install_pubkey(){
-  pub=$1
+  pub=$1; from=$2
   case "$pub" in
     ssh-ed25519\ *|ssh-rsa\ *|ecdsa-*\ *|sk-*\ *) : ;;
     *) say "${R}公钥格式不对,应以 ssh-ed25519 / ssh-rsa 等开头${N}"; return 1 ;;
@@ -90,6 +90,7 @@ install_pubkey(){
   mkdir -p "$sshdir"; chmod 700 "$sshdir"
   touch "$ak"; chmod 600 "$ak"
   opts="command=\"$cp\",no-port-forwarding,no-agent-forwarding,no-x11-forwarding,no-pty"
+  [ -n "$from" ] && opts="from=\"$from\",$opts"
   body=$(echo "$pub" | awk '{print $2}')
   if [ -n "$body" ] && grep -qF "$body" "$ak" 2>/dev/null; then
     grep -vF "$body" "$ak" > "$ak.tmp" 2>/dev/null; mv "$ak.tmp" "$ak"; chmod 600 "$ak"
@@ -99,6 +100,7 @@ install_pubkey(){
   say "${G}已安装受限监控公钥${N}"
   say "  采集脚本: ${C}$cp${N}"
   say "  authorized_keys: ${C}$ak${N}"
+  [ -n "$from" ] && say "  来源限制: ${C}from=\"$from\"${N}(仅此 IP 可用此钥)"
   say "  ${GR}该公钥仅能执行只读采集,无 shell / 无转发 / 无 pty${N}"
   say "${GR}主控侧:用对应私钥添加节点即可拉取(host 填本机 DDNS 域名)${N}"
 }
@@ -225,7 +227,8 @@ menu(){
         say "${GR}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${N}"
         read -r pub
         [ -z "$pub" ] && { say "取消"; pause; continue; }
-        install_pubkey "$pub"; pause ;;
+        printf "限制来源 IP(主控IP,可逗号分隔多个;留空=不限制): "; read -r fip
+        install_pubkey "$pub" "$fip"; pause ;;
       2) gen_key; pause ;;
       3) do_local; pause ;;
       4) uninstall; pause ;;
@@ -241,9 +244,12 @@ menu(){
 # =============================================================
 case "${1:-}" in
   add)
-    if [ -n "$2" ]; then install_pubkey "$2"
+    # add "公钥" ["来源IP"]
+    if [ -n "$2" ]; then install_pubkey "$2" "$3"
     else
-      say "${GR}粘贴主控的公钥(单行)后回车:${N}"; read -r pub; install_pubkey "$pub"
+      say "${GR}粘贴主控的公钥(单行)后回车:${N}"; read -r pub
+      printf "限制来源 IP(主控IP,留空=不限制): "; read -r fip
+      install_pubkey "$pub" "$fip"
     fi ;;
   gen|generate) gen_key ;;
   status|local) do_local ;;
@@ -251,8 +257,8 @@ case "${1:-}" in
   update|upgrade) do_update ;;
   ""|menu) menu ;;
   -h|--help|help)
-    echo "用法: $0 [add [\"公钥\"]|gen|status|remove|update|menu]"
-    echo "  add [公钥]   安装受限监控公钥(带参数则直接装,否则提示粘贴)"
+    echo "用法: $0 [add [\"公钥\"] [\"来源IP\"]|gen|status|remove|update|menu]"
+    echo "  add [公钥] [IP]   安装受限公钥;给 IP 则用 from= 限制仅该 IP 可用"
     echo "  gen          本机生成密钥对并安装受限公钥,打印私钥给主控"
     echo "  status       查看本机状态"
     echo "  remove       卸载受限公钥与采集脚本"
