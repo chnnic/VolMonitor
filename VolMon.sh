@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.4"
+VER="1.3.5"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -101,7 +101,7 @@ SSH_TIMEOUT=8             # SSH 连接超时(秒)
 SSH_KEY="\$HOME/.ssh/id_ed25519"   # 默认 SSH 私钥(节点可单独覆盖)
 ENABLE_METRIC_ALERTS=1    # 是否开启磁盘等指标告警
 DISK_WARN=90              # 磁盘使用率告警阈值(%)
-DAEMON_INTERVAL=60        # daemon 模式轮询间隔(秒)
+DAEMON_INTERVAL=30        # daemon 模式轮询间隔(秒)
 EOF
     echo -e "${CY}已生成默认配置: $CONF${C0}"
   fi
@@ -826,7 +826,7 @@ cron_remove(){
 
 do_daemon(){
   load_conf
-  local cyc=0 iv="${DAEMON_INTERVAL:-60}"
+  local cyc=0 iv="${DAEMON_INTERVAL:-30}"
   while true; do
     cyc=$((cyc+1))
     cls
