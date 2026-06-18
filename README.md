@@ -234,7 +234,31 @@ volmon-node.sh [add ["公钥"] ["来源IP"]|gen|status|remove|update|menu]
 | `SSH_KEY` | `$HOME/.ssh/id_ed25519` | 默认 SSH 私钥(节点可单独覆盖) |
 | `ENABLE_METRIC_ALERTS` | `1` | 是否开启磁盘等指标告警 |
 | `DISK_WARN` | `90` | 磁盘使用率告警阈值(%) |
-| `DAEMON_INTERVAL` | `60` | daemon 模式轮询间隔(秒) |
+| `DAEMON_INTERVAL` | `30` | daemon 模式轮询间隔(秒) |
+
+### 手动修改已生成的配置
+
+配置改动**无需重启任何服务**——脚本每次运行都会重新读取该文件。用编辑器改对应行保存即可:
+
+```bash
+nano ~/.vol-monitor/config.conf      # 或 vi
+```
+
+也可用一条命令修改(以轮询间隔为例):
+
+```bash
+sed -i 's/^DAEMON_INTERVAL=.*/DAEMON_INTERVAL=30/' ~/.vol-monitor/config.conf
+```
+
+或删掉某行,让它走脚本内置默认:
+
+```bash
+sed -i '/^DAEMON_INTERVAL=/d' ~/.vol-monitor/config.conf
+```
+
+注意:等号两边不要加空格(`KEY=VALUE`);字符串值建议保留引号(如 `SSH_KEY="/root/.vol-monitor/keys/x.key"`);`TG_BOT_TOKEN` / `TG_CHAT_ID` 等也可直接用菜单 `4` 修改,免得手输出错。
+
+> 升级脚本不会覆盖你的 `config.conf`;新版调整的只是「全新安装」的默认值,已有配置需按上述方法手动改。
 
 ---
 
