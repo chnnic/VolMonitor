@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.0"
+VER="1.4.1"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -963,6 +963,50 @@ banner(){   # $1 = 可选副标题(子菜单名)
   echo -e "${CC}  ────────────────────────────────────────${C0}"
 }
 
+is_int(){ case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+config_menu(){
+  while true; do
+    load_conf
+    cls; banner "设置 config"
+    echo -e "  ${CGRY}配置文件: $CONF${C0}"
+    echo
+    echo -e "  ${CB}1${C0}) 连续失败判离线阈值   FAIL_THRESHOLD = ${CC}${FAIL_THRESHOLD}${C0}"
+    echo -e "  ${CB}2${C0}) SSH 连接超时(秒)     SSH_TIMEOUT    = ${CC}${SSH_TIMEOUT}${C0}"
+    echo -e "  ${CB}3${C0}) 全局默认私钥           SSH_KEY        = ${CC}${SSH_KEY}${C0}"
+    echo -e "  ${CB}4${C0}) 磁盘告警开关(1/0)     ENABLE_METRIC_ALERTS = ${CC}${ENABLE_METRIC_ALERTS}${C0}"
+    echo -e "  ${CB}5${C0}) 磁盘告警阈值(%)       DISK_WARN      = ${CC}${DISK_WARN}${C0}"
+    echo -e "  ${CB}6${C0}) daemon 轮询间隔(秒)   DAEMON_INTERVAL= ${CC}${DAEMON_INTERVAL}${C0}"
+    echo
+    echo -e "  ${CB}e${C0}) 用编辑器打开   ${CB}r${C0}) 恢复默认值   ${CB}b${C0}) 返回"
+    read -rp "选择: " s || break
+    case "$s" in
+      1) read -rp "新阈值(正整数): " v; is_int "$v" && kv_set "$CONF" FAIL_THRESHOLD "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
+      2) read -rp "新超时秒数(正整数): " v; is_int "$v" && kv_set "$CONF" SSH_TIMEOUT "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
+      3) read -rp "私钥路径(可填密钥名/路径,留空跳过): " v
+         [ -n "$v" ] && { v=$(resolve_key "$v"); kv_set "$CONF" SSH_KEY "\"$v\""; echo -e "${CG}已设为 $v${C0}"; }
+         pause ;;
+      4) read -rp "磁盘告警开关 1=开 0=关: " v
+         case "$v" in 0|1) kv_set "$CONF" ENABLE_METRIC_ALERTS "$v" ;; *) echo -e "${CR}只能 0 或 1${C0}" ;; esac; pause ;;
+      5) read -rp "磁盘告警阈值 %(正整数): " v; is_int "$v" && kv_set "$CONF" DISK_WARN "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
+      6) read -rp "daemon 轮询间隔秒(正整数): " v; is_int "$v" && kv_set "$CONF" DAEMON_INTERVAL "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
+      e) "${EDITOR:-vi}" "$CONF" ;;
+      r)
+        read -rp "恢复操作类设置为默认?(不影响 Telegram)[y/N]: " yn
+        case "$yn" in y|Y)
+          kv_set "$CONF" FAIL_THRESHOLD 3
+          kv_set "$CONF" SSH_TIMEOUT 8
+          kv_set "$CONF" SSH_KEY "\"\$HOME/.ssh/id_ed25519\""
+          kv_set "$CONF" ENABLE_METRIC_ALERTS 1
+          kv_set "$CONF" DISK_WARN 90
+          kv_set "$CONF" DAEMON_INTERVAL 30
+          echo -e "${CG}已恢复默认${C0}" ;;
+        esac; pause ;;
+      b|"") break ;;
+    esac
+  done
+}
+
 menu(){
   load_conf
   while true; do
@@ -979,6 +1023,7 @@ menu(){
     echo -e "  ${CB}8${C0}) 前台 daemon 轮询"
     echo -e "  ${CB}9${C0}) 密钥管理(导入 / 列出 / 删除)"
     echo -e "  ${CB}s${C0}) 安装启动快捷命令 volmon"
+    echo -e "  ${CB}c${C0}) 设置(编辑 config)"
     echo -e "  ${CB}u${C0}) 检查更新(从 GitHub)"
     echo -e "  ${CB}0${C0}) 退出"
     echo
@@ -1006,6 +1051,7 @@ menu(){
       8) do_daemon ;;
       9) key_menu ;;
       s|S) shortcut_install; pause ;;
+      c|C) config_menu ;;
       u|U) do_update; pause ;;
       0|q) exit 0 ;;
       *) echo -e "${CR}无效选择${C0}"; pause ;;
