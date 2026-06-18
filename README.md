@@ -52,8 +52,10 @@ VolMonitor 把方向反过来:
 - **磁盘告警**:磁盘使用率超阈值推送(可关闭)。
 - **状态总览**:每节点显示「最后检测 / 最后在线 / 连续失败」及运行时长、负载、内存、磁盘、累计流量、TCP 连接数、运行中的代理服务。
 - **节点备注名**:中文友好名,推送与列表中以「备注名 [节点名]」显示,一眼识别是哪台。
-- **密钥管理**:导入(文件 / 粘贴)、列出、删除、设为全局默认,自动 `chmod 600`。
-- **受限监控公钥**:在被控端一键安装「强制命令 + 禁用所有转发 / pty」的公钥,该钥匙只能触发只读采集,拿不到 shell,泄露也基本无害。兼容 OpenSSH 与 Dropbear。
+- **密钥管理**:导入(文件 / 粘贴)、**现场新建密钥对**、列出、删除、设为全局默认,自动 `chmod 600`。
+- **受限监控公钥**:在被控端安装「强制命令 + 禁用所有转发 / pty」的公钥,该钥匙只能触发只读采集,拿不到 shell,泄露也基本无害。兼容 OpenSSH 与 Dropbear。
+- **一键被控部署**:添加节点 / 生成密钥后,自动给出被控机 `curl|sh` / `wget|sh` 一键安装命令(直接拉 `volmon-node.sh` 并装上公钥)。
+- **来源 IP 限制**:可加 `from="主控IP"`,使该钥匙仅主控 IP 可用,私钥泄露也无法他用;生成时自动探测主控公网 IP。
 - **DDNS 友好**:节点主机字段可直接填 DDNS 域名,后端 IP 变化无影响。
 - **Telegram 测试**:普通 / 模拟离线 / 模拟恢复 三种推送预览。
 - **快捷命令**:一键安装 `volmon` 全局命令。
@@ -104,9 +106,9 @@ chmod +x volmon-node.sh
 ```
 
 1. **菜单 `s`** — 安装快捷命令 `volmon`,之后任意目录可直接敲 `volmon`。
-2. **菜单 `9`** — 密钥管理,导入用于拉取的 SSH 私钥(文件路径或粘贴内容)。
+2. **菜单 `9`** — 密钥管理:导入已有私钥,或 `n` 现场新建密钥对。
 3. **菜单 `4` → `c`** — 配置 Telegram Bot Token 与 Chat ID;`t` 发送测试推送。
-4. **菜单 `3` → `a`** — 添加节点:主机填被控的 DDNS 域名 / IP,密钥可填已导入的密钥名。
+4. **菜单 `3` → `a`** — 添加节点:主机填被控的 DDNS 域名 / IP;密钥处填已有密钥名,或输入 `new` 现场生成。添加后会给出被控机的一键安装命令(含来源 IP 限制),复制到被控执行即可。
 5. **菜单 `5`** — 安装 cron 定时拉取(默认每分钟一次)。
 
 ### 被控机
@@ -131,18 +133,44 @@ command="/usr/local/bin/volmon-collect",no-port-forwarding,no-agent-forwarding,n
 
 采集脚本落地到 `/usr/local/bin/volmon-collect`(不可写则退到 `~/.volmon-collect`),仅为按需运行的只读脚本 —— 无常驻进程、无监听端口、无外联,不触发探针检测。
 
-### 用 volmon-node.sh(被控机,推荐)
+加上**来源 IP 限制**后(推荐),该行形如:
+
+```
+from="主控IP",command="/usr/local/bin/volmon-collect",no-port-forwarding,no-agent-forwarding,no-x11-forwarding,no-pty ssh-ed25519 AAAA...
+```
+
+`from=` 使这把钥匙**仅主控 IP 可用**,私钥即便泄露,从其他 IP 也无法通过认证。
+
+### 推荐流程:主控生成 + 一键部署到被控
+
+在主控 `VolMon.sh` 添加节点时,密钥处输入 `new` 现场生成密钥对(或菜单 9 → `n`);也可直接选用已有密钥。主控会:
+
+1. 生成 / 选用密钥(私钥留主控),自动探测主控公网 IP(可改 / 可填 CIDR / 可跳过);
+2. 打印被控机一键安装命令,直接复制到**被控机**执行其一即可:
 
 ```bash
-./volmon-node.sh add "ssh-ed25519 AAAA... 主控公钥"   # 粘贴主控公钥安装
-./volmon-node.sh gen                                  # 本机生成密钥对,打印私钥转交主控
-./volmon-node.sh status                               # 看本机状态
-./volmon-node.sh remove                               # 卸载
-./volmon-node.sh                                       # 无参数进菜单
+# ① curl 一键
+curl -fsSL https://raw.githubusercontent.com/chnnic/VolMonitor/main/volmon-node.sh | sh -s -- add "ssh-ed25519 AAAA..." "主控IP"
+# ② wget 一键
+wget -qO- https://raw.githubusercontent.com/chnnic/VolMonitor/main/volmon-node.sh | sh -s -- add "ssh-ed25519 AAAA..." "主控IP"
+```
+
+命令同时会存到 `~/.vol-monitor/install-<节点名>.txt` 便于复制。`"主控IP"` 省略则不加来源限制。
+
+### 在被控机上直接用 volmon-node.sh
+
+```bash
+./volmon-node.sh add "ssh-ed25519 AAAA... 主控公钥" "主控IP"   # 装公钥;给 IP 则加 from= 限制
+./volmon-node.sh gen                                          # 本机生成密钥对,打印私钥转交主控
+./volmon-node.sh status                                       # 看本机状态
+./volmon-node.sh remove                                       # 卸载
+./volmon-node.sh                                               # 无参数进菜单
 ```
 
 - **方式 1(推荐)**:在主控生成密钥对,把**公钥**粘到被控 `add` —— 私钥永不离开主控。
 - **方式 2**:被控 `gen` 生成,脚本打印**私钥**供你转交主控,随后本机自动抹除私钥,只留受限公钥。
+
+> 动态 IP 的主控慎用 `from=` 锁单一 IP(换 IP 会连不上),可改用运营商 CIDR 或不加限制。
 
 ### 用 VolMon.sh(若主控脚本也在被控上)
 
@@ -179,12 +207,12 @@ VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]
 ### volmon-node.sh(被控)
 
 ```
-volmon-node.sh [add ["公钥"]|gen|status|remove|update|menu]
+volmon-node.sh [add ["公钥"] ["来源IP"]|gen|status|remove|update|menu]
 ```
 
 | 命令 | 说明 |
 |------|------|
-| `add [公钥]` | 安装受限监控公钥(带参数直接装,否则提示粘贴) |
+| `add [公钥] [IP]` | 安装受限公钥;给 IP 则加 `from=` 限制仅该 IP 可用 |
 | `gen` | 本机生成密钥对并安装受限公钥,打印私钥给主控 |
 | `status` | 查看本机状态 |
 | `remove` | 卸载受限公钥与采集脚本 |
