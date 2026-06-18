@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.8"
+VER="1.2.9"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -455,11 +455,25 @@ key_generate(){
   ssh-keygen -t ed25519 -N "" -C "volmon-$kn" -f "$f" -q || { echo -e "${CR}生成失败${C0}"; return 1; }
   chmod 600 "$f"
   GEN_KEY_PATH="$f"
+  local pub; pub=$(cat "$f.pub")
   echo -e "${CG}已生成密钥对: $f${C0}"
-  echo -e "${CY}===== 公钥(复制到被控机执行: volmon-node.sh add \"...\")=====${C0}"
-  cat "$f.pub"
-  echo -e "${CY}=================================================================${C0}"
-  echo -e "${CGRY}私钥已留在主控,主控用它拉取;被控机装上面这行公钥即可。${C0}"
+  echo -e "${CGRY}私钥留在主控用于拉取;被控机装下面这把公钥即可。${C0}"
+  echo -e "${CC}公钥:${C0} $pub"
+  echo
+  echo -e "${CB}被控机安装(任选其一,直接在被控机执行):${C0}"
+  echo -e "${CY}① 一键拉取并安装(curl):${C0}"
+  echo -e "   curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+  echo -e "${CY}② 一键拉取并安装(wget):${C0}"
+  echo -e "   wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+  echo -e "${CY}③ 已有 volmon-node.sh 时:${C0}"
+  echo -e "   ./volmon-node.sh add \"$pub\""
+  # 同时把一键命令写到文件,便于复制
+  local cmdf="$BASE_DIR/install-$kn.txt"
+  {
+    echo "# 被控机安装命令(任选其一)"
+    echo "curl -fsSL $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+    echo "wget -qO- $REPO_RAW/volmon-node.sh | sh -s -- add \"$pub\""
+  } > "$cmdf" 2>/dev/null && echo -e "${CGRY}(命令已存到 $cmdf)${C0}"
   return 0
 }
 
