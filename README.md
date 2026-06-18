@@ -91,7 +91,7 @@ chmod +x volmon-node.sh
 ./volmon-node.sh
 ```
 
-首次运行主控会在 `~/.nat-monitor/` 下生成配置目录。
+首次运行主控会在 `~/.vol-monitor/` 下生成配置目录。
 
 ---
 
@@ -195,7 +195,7 @@ volmon-node.sh [add ["公钥"]|gen|status|remove|update|menu]
 
 ## 配置文件
 
-路径:`~/.nat-monitor/config.conf`(可用环境变量 `NATMON_DIR` 覆盖整个目录)。
+路径:`~/.vol-monitor/config.conf`(可用环境变量 `VOLMON_DIR` 覆盖整个目录)。
 
 | 项 | 默认 | 说明 |
 |------|------|------|
@@ -212,7 +212,7 @@ volmon-node.sh [add ["公钥"]|gen|status|remove|update|menu]
 
 ## 节点配置格式
 
-路径:`~/.nat-monitor/nodes.conf`,每行一个节点,字段以 `|` 分隔:
+路径:`~/.vol-monitor/nodes.conf`,每行一个节点,字段以 `|` 分隔:
 
 ```
 名称|主机|端口|用户|密钥|备注
@@ -221,7 +221,7 @@ volmon-node.sh [add ["公钥"]|gen|status|remove|update|menu]
 示例:
 
 ```
-nat-home|nat.example.xyz|2222|root|/root/.nat-monitor/keys/hk.key|香港家宽
+nat-home|nat.example.xyz|2222|root|/root/.vol-monitor/keys/hk.key|香港家宽
 ```
 
 - **名称**:唯一标识(英文 / 数字)。
@@ -256,7 +256,7 @@ nat-home|nat.example.xyz|2222|root|/root/.nat-monitor/keys/hk.key|香港家宽
 菜单 `5` 安装 cron(默认每分钟拉取一次),等价于:
 
 ```cron
-* * * * * /path/to/VolMon.sh run >/dev/null 2>&1 # nat-monitor
+* * * * * /path/to/VolMon.sh run >/dev/null 2>&1 # vol-monitor
 ```
 
 也可用 `daemon` 模式在前台循环(间隔由 `DAEMON_INTERVAL` 控制):
@@ -278,6 +278,7 @@ nat-home|nat.example.xyz|2222|root|/root/.nat-monitor/keys/hk.key|香港家宽
 
 - 远程版本不同 → 显示 `本地 vX → 远程 vY`,确认后更新;已是最新则默认跳过。
 - 更新前自动备份为 `脚本名.bak`;写入需要对脚本文件有写权限(必要时用 `sudo`)。
+- 旧版配置目录 `~/.nat-monitor/` 会在更新后首次运行时**自动迁移**到 `~/.vol-monitor/`(含密钥与内部路径引用),无需手动处理。
 - 更新源可用环境变量覆盖(换分支 / 镜像):
 
 ```bash
@@ -291,7 +292,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 主控端:
 
 ```
-~/.nat-monitor/
+~/.vol-monitor/
 ├── config.conf        # 全局配置
 ├── nodes.conf         # 节点列表
 ├── monitor.log        # 拉取 / 告警日志
