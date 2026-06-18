@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.5"
+VER="1.0.6"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -139,6 +139,40 @@ uninstall(){
 }
 
 # =============================================================
+#  修改 / 查看 受限公钥的来源 IP 限制(from=)
+# =============================================================
+current_from(){
+  ak="$HOME/.ssh/authorized_keys"
+  [ -f "$ak" ] || return 1
+  grep 'volmon-collect' "$ak" 2>/dev/null | sed -n 's/^from="\([^"]*\)".*/\1/p' | head -1
+}
+
+set_from(){
+  newfrom=$1
+  ak="$HOME/.ssh/authorized_keys"
+  [ -f "$ak" ] || { say "${R}未找到 $ak${N}"; return 1; }
+  if ! grep -q 'volmon-collect' "$ak" 2>/dev/null; then
+    say "${R}未找到已安装的受限公钥,请先用 add 安装${N}"; return 1
+  fi
+  tmp="$ak.tmp"; : > "$tmp"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *volmon-collect*)
+        rest=$(printf '%s' "$line" | sed 's/^from="[^"]*",//')
+        if [ -n "$newfrom" ]; then
+          printf 'from="%s",%s\n' "$newfrom" "$rest" >> "$tmp"
+        else
+          printf '%s\n' "$rest" >> "$tmp"
+        fi ;;
+      *) printf '%s\n' "$line" >> "$tmp" ;;
+    esac
+  done < "$ak"
+  mv "$tmp" "$ak"; chmod 600 "$ak"
+  if [ -n "$newfrom" ]; then say "${G}已设置来源限制: from=\"$newfrom\"${N}"
+  else say "${G}已移除来源限制(任意 IP 可用此钥)${N}"; fi
+}
+
+# =============================================================
 #  本机状态
 # =============================================================
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
@@ -218,6 +252,7 @@ menu(){
     say "  ${B}2${N}) 本机生成密钥对(打印私钥转交主控)"
     say "  ${B}3${N}) 查看本机状态"
     say "  ${B}4${N}) 卸载受限公钥与采集脚本"
+    say "  ${B}5${N}) 修改来源 IP 限制(from=)"
     say "  ${B}u${N}) 检查更新(从 GitHub)"
     say "  ${B}0${N}) 退出"
     echo
@@ -232,6 +267,16 @@ menu(){
       2) gen_key; pause ;;
       3) do_local; pause ;;
       4) uninstall; pause ;;
+      5)
+        cur=$(current_from)
+        say "当前来源限制: ${C}${cur:-无(任意IP)}${N}"
+        printf "新的来源 IP(主控IP/CIDR/逗号列表;输入 no 取消限制;回车放弃修改): "; read -r nf
+        case "$nf" in
+          "") say "未修改" ;;
+          no|NO|none) set_from "" ;;
+          *) set_from "$nf" ;;
+        esac
+        pause ;;
       u|U) do_update; pause ;;
       0|q) exit 0 ;;
       *) say "${R}无效选择${N}"; pause ;;
@@ -254,13 +299,22 @@ case "${1:-}" in
   gen|generate) gen_key ;;
   status|local) do_local ;;
   remove|uninstall) uninstall ;;
+  setip|from)
+    # setip [IP]  ;  setip no 取消限制
+    case "${2:-}" in
+      "") cur=$(current_from); printf "当前: %s\n新来源 IP(no=取消): " "${cur:-无}"; read -r nf
+          case "$nf" in ""|no|NO|none) set_from "" ;; *) set_from "$nf" ;; esac ;;
+      no|NO|none) set_from "" ;;
+      *) set_from "$2" ;;
+    esac ;;
   update|upgrade) do_update ;;
   ""|menu) menu ;;
   -h|--help|help)
-    echo "用法: $0 [add [\"公钥\"] [\"来源IP\"]|gen|status|remove|update|menu]"
+    echo "用法: $0 [add [\"公钥\"] [\"来源IP\"]|gen|status|setip [IP]|remove|update|menu]"
     echo "  add [公钥] [IP]   安装受限公钥;给 IP 则用 from= 限制仅该 IP 可用"
     echo "  gen          本机生成密钥对并安装受限公钥,打印私钥给主控"
     echo "  status       查看本机状态"
+    echo "  setip [IP]   修改来源 IP 限制(无参数交互;IP=no 取消限制)"
     echo "  remove       卸载受限公钥与采集脚本"
     echo "  update       从 GitHub 更新到最新版"
     echo "  无参数        进入交互菜单" ;;
