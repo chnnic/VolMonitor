@@ -187,7 +187,7 @@ wget -qO- https://raw.githubusercontent.com/chnnic/VolMonitor/main/volmon-node.s
 ### VolMon.sh(主控)
 
 ```
-VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]
+VolMon.sh [run|status|local|daemon|test-tg|report|node-key|shortcut|update|menu]
 ```
 
 | 命令 | 说明 |
@@ -198,11 +198,12 @@ VolMon.sh [run|status|local|daemon|test-tg|node-key|shortcut|update|menu]
 | `local` | 显示本机状态 |
 | `daemon` | 前台循环轮询 |
 | `test-tg` | Telegram 推送测试 |
+| `report` | 生成并推送当日汇总日报(先刷新再发送) |
 | `node-key` | 被控机:安装 / 卸载受限监控公钥 |
 | `shortcut` | 安装 `volmon` 快捷命令 |
 | `update` | 从 GitHub 更新到最新版 |
 
-交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `u` 检查更新 · `0` 退出
+交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试+每日日报 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `c` 设置(编辑 config) · `u` 检查更新 · `0` 退出
 
 ### volmon-node.sh(被控)
 
@@ -300,6 +301,36 @@ nat-home|nat.example.xyz|2222|root|/root/.vol-monitor/keys/hk.key|香港家宽
 主机: nat.example.xyz:2222
 时间: 2026-01-01 09:03:00
 ```
+
+---
+
+## 每日日报
+
+每天定时推送一条汇总:各节点当日流量、连续失败次数、在线 / 离线统计。
+
+入口:菜单 `4`(Telegram)→ `r`(每日日报),或命令行 `./VolMon.sh report`。
+
+- `e` 启用 / 设置时间(默认 `23:59`),写入一条独立 cron(标记 `# volmon-report`,与拉取 cron 互不影响)
+- `x` 关闭
+- `t` 立即发送一次
+
+推送样例:
+
+```
+📊 VolMonitor 日报  2026-06-18
+节点 2 · 在线 1 · 离线 1
+合计今日流量 ↓3.73G ↑1.40G · 失败 287次
+————————————
+🟢 香港家宽  今日 ↓3.73G ↑1.40G  失败 0次
+🔴 死机     今日 ↓0.00G ↑0.00G  失败 287次
+```
+
+**流量是怎么算的**:被控采集脚本读取 `/proc/net/dev`(网卡自开机的累计收发字节)。`run` 每次成功拉取记录当前累计值;**当天首次成功**时存为基线;日报取「最新值 − 当天基线」即当日消耗。跨天自动重置基线与当日失败计数;机器重启计数器归零时做兜底,不出负数。
+
+**发送前自动刷新**:无论手动 `t` 立即发送还是定时触发,都会先静默拉取一遍所有节点,用此刻最新的流量 / 状态生成日报(只更新最新值,不改当天基线)。
+
+> 依赖:① 已配置 Telegram;② 已装拉取 cron(菜单 `5`)——日报只是汇总 `run` 攒下的数据,没有定时拉取就没有数据。
+> 口径:流量按 1024 进制(GiB)显示;「当日」从当天第一次成功拉取算起。
 
 ---
 
