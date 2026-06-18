@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.7"
+VER="1.2.8"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -436,6 +436,33 @@ key_import(){
   fi
 }
 
+# 新建密钥对(私钥存 keys/,打印公钥供被控机安装);成功经 GEN_KEY_PATH 返回路径
+key_generate(){
+  load_conf
+  GEN_KEY_PATH=""
+  if ! command -v ssh-keygen >/dev/null 2>&1; then
+    echo -e "${CR}本机无 ssh-keygen,无法生成密钥${C0}"; return 1
+  fi
+  local kn=$1
+  [ -z "$kn" ] && { read -rp "新密钥名称: " kn; }
+  [ -z "$kn" ] && { echo -e "${CR}名称不能为空${C0}"; return 1; }
+  kn=$(safe "$kn")
+  local f; f=$(key_path "$kn")
+  if [ -f "$f" ]; then
+    read -rp "已存在同名密钥 $kn,覆盖? [y/N]: " yn
+    case "$yn" in y|Y) rm -f "$f" "$f.pub" ;; *) echo "取消"; return 1 ;; esac
+  fi
+  ssh-keygen -t ed25519 -N "" -C "volmon-$kn" -f "$f" -q || { echo -e "${CR}生成失败${C0}"; return 1; }
+  chmod 600 "$f"
+  GEN_KEY_PATH="$f"
+  echo -e "${CG}已生成密钥对: $f${C0}"
+  echo -e "${CY}===== 公钥(复制到被控机执行: volmon-node.sh add \"...\")=====${C0}"
+  cat "$f.pub"
+  echo -e "${CY}=================================================================${C0}"
+  echo -e "${CGRY}私钥已留在主控,主控用它拉取;被控机装上面这行公钥即可。${C0}"
+  return 0
+}
+
 key_list(){
   load_conf
   echo -e "${CB}已导入密钥:${C0}"
@@ -463,10 +490,11 @@ key_del(){
 key_menu(){
   while true; do
     cls; banner "密钥管理"; echo; key_list; echo
-    echo -e "  ${CB}i${C0}) 导入  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
+    echo -e "  ${CB}i${C0}) 导入  ${CB}n${C0}) 新建密钥对  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
     read -rp "选择: " s
     case "$s" in
       i) key_import; pause ;;
+      n|N) key_generate; pause ;;
       d) key_del; pause ;;
       g)
         key_list
@@ -499,16 +527,22 @@ node_add(){
   read -rp "DDNS 域名 / Tailscale IP / 主机: " h
   read -rp "SSH 端口 [22]: " p; p=${p:-22}
   read -rp "SSH 用户 [root]: " u; u=${u:-root}
-  echo -e "${CGRY}SSH 私钥: 留空=用全局默认;或输入下方已导入的密钥名;或输入文件路径${C0}"
+  echo -e "${CGRY}SSH 私钥: 留空=用全局默认;或输入密钥名 / 文件路径;或输入 ${C0}${CB}new${C0}${CGRY} 新建密钥对${C0}"
   key_list
   if ! ls "$KEYS_DIR"/*.key >/dev/null 2>&1; then
     local gk="${SSH_KEY/#\~/$HOME}"
     [ -n "$gk" ] && [ -f "$gk" ] \
-      && echo -e "${CGRY}  (尚未导入密钥;留空将使用全局默认 ${gk})${C0}" \
-      || echo -e "${CY}  尚未导入任何密钥。可先到菜单 9 导入主控私钥,或在此直接填私钥文件路径。${C0}"
+      && echo -e "${CGRY}  (尚未导入密钥;留空将使用全局默认 ${gk};或输入 new 新建)${C0}" \
+      || echo -e "${CY}  尚未导入任何密钥。可输入 ${CB}new${C0}${CY} 现场新建密钥对,或填私钥文件路径。${C0}"
   fi
-  read -rp "密钥(名称/路径/空): " k
-  k=$(resolve_key "$k")
+  read -rp "密钥(名称/路径/new/空): " k
+  case "$k" in
+    new|NEW|新建|n|N)
+      key_generate "$n"
+      if [ -n "$GEN_KEY_PATH" ]; then k="$GEN_KEY_PATH"; else k=""; fi
+      ;;
+    *) k=$(resolve_key "$k") ;;
+  esac
   [ -z "$n" ] || [ -z "$h" ] && { echo -e "${CR}名称和主机不能为空${C0}"; return; }
   [ -z "$rmk" ] && rmk="$n"
   if grep -q "^$n|" "$NODES" 2>/dev/null; then echo -e "${CR}已存在同名节点${C0}"; return; fi
