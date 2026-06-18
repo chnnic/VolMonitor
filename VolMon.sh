@@ -5,14 +5,15 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.2.5"
+VER="1.2.6"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
 SELF_FILE="VolMon.sh"
 
 # ---------- 路径 ----------
-BASE_DIR="${NATMON_DIR:-$HOME/.nat-monitor}"
+BASE_DIR="${VOLMON_DIR:-${NATMON_DIR:-$HOME/.vol-monitor}}"
+OLD_BASE_DIR="$HOME/.nat-monitor"
 CONF="$BASE_DIR/config.conf"
 NODES="$BASE_DIR/nodes.conf"
 STATE_DIR="$BASE_DIR/state"
@@ -72,12 +73,27 @@ COLLECT
 # =============================================================
 #  基础函数
 # =============================================================
+migrate_dir(){
+  # 仅当使用默认新目录、旧目录存在且新目录尚未建立时,自动迁移
+  [ "$BASE_DIR" = "$HOME/.vol-monitor" ] || return 0
+  [ -d "$OLD_BASE_DIR" ] || return 0
+  [ -e "$BASE_DIR" ] && return 0
+  if mv "$OLD_BASE_DIR" "$BASE_DIR" 2>/dev/null || { cp -a "$OLD_BASE_DIR" "$BASE_DIR" 2>/dev/null && rm -rf "$OLD_BASE_DIR"; }; then
+    # 重写内部存储的绝对路径引用(导入密钥路径等)
+    for f in "$BASE_DIR/config.conf" "$BASE_DIR/nodes.conf"; do
+      [ -f "$f" ] && sed -i 's#/\.nat-monitor/#/.vol-monitor/#g' "$f"
+    done
+    echo -e "${CY}已将配置目录迁移: $OLD_BASE_DIR -> $BASE_DIR${C0}"
+  fi
+}
+
 load_conf(){
+  migrate_dir
   mkdir -p "$BASE_DIR" "$STATE_DIR" "$SNAP_DIR" "$KEYS_DIR"
   chmod 700 "$KEYS_DIR" 2>/dev/null
   if [ ! -f "$CONF" ]; then
     cat > "$CONF" <<EOF
-# ===== nat-monitor 配置 =====
+# ===== vol-monitor 配置 =====
 TG_BOT_TOKEN=""           # Telegram Bot Token
 TG_CHAT_ID=""             # 接收告警的 chat_id
 FAIL_THRESHOLD=3          # 连续拉取失败几次判定离线
@@ -575,9 +591,9 @@ tg_test(){
   local now; now=$(date '+%F %T %Z')
   local ok=1
   case "$t" in
-    1) tg_send "🔔 nat-monitor 测试消息\n时间: $now"; ok=$? ;;
-    2) tg_send "$(printf '🔴 <b>香港家宽 (nat-home)</b> 离线告警\n连续失败: 3 次\n最后在线: %s\n主机: nat.289599.xyz:2222\n时间: %s' "$(date '+%F %T')" "$now")"; ok=$? ;;
-    3) tg_send "$(printf '✅ <b>香港家宽 (nat-home)</b> 已恢复在线\n主机: nat.289599.xyz:2222\n时间: %s' "$now")"; ok=$? ;;
+    1) tg_send "🔔 VolMonitor 测试消息\n时间: $now"; ok=$? ;;
+    2) tg_send "$(printf '🔴 <b>香港家宽 (nat-home)</b> 离线告警\n连续失败: 3 次\n最后在线: %s\n主机: nat.example.xyz:2222\n时间: %s' "$(date '+%F %T')" "$now")"; ok=$? ;;
+    3) tg_send "$(printf '✅ <b>香港家宽 (nat-home)</b> 已恢复在线\n主机: nat.example.xyz:2222\n时间: %s' "$now")"; ok=$? ;;
     *) echo "取消"; return ;;
   esac
   if [ "$ok" = "0" ]; then echo -e "${CG}发送成功,检查 Telegram${C0}"
@@ -671,15 +687,15 @@ cron_install(){
   local self; self=$(self_path)
   read -rp "每隔几分钟拉取一次 [1]: " m; m=${m:-1}
   local expr="*/$m"; [ "$m" = "1" ] && expr="*"
-  local line="$expr * * * * $self run >/dev/null 2>&1 # nat-monitor"
-  ( crontab -l 2>/dev/null | grep -v '# nat-monitor'; echo "$line" ) | crontab -
+  local line="$expr * * * * $self run >/dev/null 2>&1 # vol-monitor"
+  ( crontab -l 2>/dev/null | grep -v '# nat-monitor' | grep -v '# vol-monitor'; echo "$line" ) | crontab -
   echo -e "${CG}已安装 cron: 每 ${m} 分钟拉取一次${C0}"
   echo -e "${CGRY}查看: crontab -l${C0}"
 }
 
 cron_remove(){
-  ( crontab -l 2>/dev/null | grep -v '# nat-monitor' ) | crontab -
-  echo -e "${CG}已移除 nat-monitor cron${C0}"
+  ( crontab -l 2>/dev/null | grep -v '# nat-monitor' | grep -v '# vol-monitor' ) | crontab -
+  echo -e "${CG}已移除 vol-monitor cron${C0}"
 }
 
 do_daemon(){
