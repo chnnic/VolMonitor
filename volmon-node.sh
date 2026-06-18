@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.3"
+VER="1.0.4"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -190,7 +190,12 @@ do_update(){
   cp "$self" "$self.bak" 2>/dev/null && say "${GR}已备份旧版: $self.bak${N}"
   if cat "$tmp" > "$self" 2>/dev/null; then
     chmod +x "$self" 2>/dev/null; rm -f "$tmp"
-    say "${G}已更新到 v$newver,请重新运行脚本${N}"; exit 0
+    say "${G}已更新到 v$newver${N}"
+    if [ -t 0 ] && [ -t 1 ]; then
+      say "${GR}正在以新版本重新启动...${N}"; sleep 1
+      exec "$self"
+    fi
+    say "${GR}请重新运行脚本${N}"; exit 0
   else
     say "${R}写入失败(可能无权限)。可手动: sudo cp $tmp $self${N}"; return 1
   fi
