@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.1"
+VER="1.4.2"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -871,6 +871,9 @@ do_daemon(){
 do_report(){
   load_conf
   [ -s "$NODES" ] || { echo "无节点"; return; }
+  # 发送前实时刷新各节点(更新最新流量/状态,基线不变)
+  [ -t 1 ] && echo -e "${CGRY}正在刷新各节点最新数据...${C0}"
+  VERBOSE=0 do_run
   local today; today=$(date '+%F')
   local nodes=0 up=0 down=0 trx=0 ttx=0 tdf=0 lines="" name host port user key remark
   while IFS='|' read -r name host port user key remark; do
