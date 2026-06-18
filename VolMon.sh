@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.3.3"
+VER="1.3.4"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -826,10 +826,27 @@ cron_remove(){
 
 do_daemon(){
   load_conf
-  echo -e "${CG}daemon 启动,每 ${DAEMON_INTERVAL:-60}s 轮询。Ctrl+C 退出${C0}"
+  local cyc=0 iv="${DAEMON_INTERVAL:-60}"
   while true; do
-    VERBOSE=0 do_run
-    sleep "${DAEMON_INTERVAL:-60}"
+    cyc=$((cyc+1))
+    cls
+    banner "daemon 实时轮询"
+    echo -e "${CGRY}第 ${cyc} 轮 · $(date '+%F %T') · 间隔 ${iv}s · Ctrl+C 退出${C0}"
+    echo
+    VERBOSE=1 do_run
+    # 汇总在线/离线
+    local up=0 down=0 other=0 name rest st
+    while IFS='|' read -r name rest; do
+      [ -z "$name" ] && continue
+      case "$name" in \#*) continue ;; esac
+      st=$(kv_get "$(st_file "$name")" STATUS)
+      case "$st" in UP) up=$((up+1)) ;; DOWN) down=$((down+1)) ;; *) other=$((other+1)) ;; esac
+    done < "$NODES"
+    local nxt; nxt=$(date '+%H:%M:%S' -d "+${iv} sec" 2>/dev/null)
+    echo
+    echo -e "${CC}────────────────────────────────────────${C0}"
+    echo -e "汇总: ${CG}在线 ${up}${C0}  ${CR}离线 ${down}${C0}  其他 ${other}${nxt:+   下次轮询 $nxt}"
+    sleep "$iv"
   done
 }
 
