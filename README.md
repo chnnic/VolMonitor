@@ -17,6 +17,8 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
+当前版本:`VolMon.sh` v1.4.3;`volmon-node.sh` v1.0.7。
+
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
 ---
@@ -61,6 +63,7 @@ VolMonitor 把方向反过来:
 - **快捷命令**:一键安装 `volmon` 全局命令。
 - **自更新**:从 GitHub 一键拉取最新版,自动校验 + 备份旧版。
 - **跨平台采集**:Debian / Ubuntu / Alpine / OpenWrt 通用。
+- **安全加固**:配置写入会安全转义字符串;SSH 私钥参数按独立参数传递;临时密钥在私有临时目录中生成。
 
 ---
 
@@ -208,7 +211,7 @@ VolMon.sh [run|status|local|daemon|test-tg|report|node-key|shortcut|update|menu]
 ### volmon-node.sh(被控)
 
 ```
-volmon-node.sh [add ["公钥"] ["来源IP"]|gen|status|remove|update|menu]
+volmon-node.sh [add ["公钥"] ["来源IP"]|gen|status|setip [IP]|remove|update|menu]
 ```
 
 | 命令 | 说明 |
@@ -216,6 +219,7 @@ volmon-node.sh [add ["公钥"] ["来源IP"]|gen|status|remove|update|menu]
 | `add [公钥] [IP]` | 安装受限公钥;给 IP 则加 `from=` 限制仅该 IP 可用 |
 | `gen` | 本机生成密钥对并安装受限公钥,打印私钥给主控 |
 | `status` | 查看本机状态 |
+| `setip [IP]` | 修改已安装受限公钥的 `from=` 来源限制;`IP=no` 取消限制 |
 | `remove` | 卸载受限公钥与采集脚本 |
 | `update` | 从 GitHub 更新到最新版 |
 | *(无参数)* | 进入交互菜单 |
@@ -367,6 +371,11 @@ nat-home|nat.example.xyz|2222|root|/root/.vol-monitor/keys/hk.key|香港家宽
 ```bash
 VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.sh update
 ```
+
+### 版本记录
+
+- `VolMon.sh` v1.4.3 / `volmon-node.sh` v1.0.7:修复 `local` / `status` 成功输出后退出码为 1 的问题;加固配置写入、SSH 私钥参数传递与临时密钥生成;仓库脚本文件设置为可执行。
+- `VolMon.sh` v1.4.2:完善每日日报说明与更新流程。
 
 ---
 
