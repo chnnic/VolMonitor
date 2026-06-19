@@ -17,7 +17,7 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
-当前版本:`VolMon.sh` v1.4.6;`volmon-node.sh` v1.1.0。
+当前版本:`VolMon.sh` v1.4.7;`volmon-node.sh` v1.1.0。
 
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
@@ -281,10 +281,10 @@ sed -i '/^DAEMON_INTERVAL=/d' ~/.vol-monitor/config.conf
 nat-home|nat.example.xyz|2222|root|/root/.vol-monitor/keys/hk.key|香港家宽
 ```
 
-- **名称**:唯一标识(英文 / 数字)。
+- **名称**:唯一标识(英文 / 数字),用于状态文件和日报基线;需要改显示名时优先改“备注”。
 - **主机**:DDNS 域名 / Tailscale IP / 公网 IP 均可。
 - **密钥**:留空则用全局默认 `SSH_KEY`。
-- **备注**:推送与列表中的友好显示名,留空回退为名称。
+- **备注**:推送与列表中的友好显示名,留空回退为名称;修改备注不会影响日报基线。确实需要修改“名称”时,请用节点管理里的“重命名节点”,脚本会迁移状态和快照。若已经手动改名导致基线断开,可用“迁移旧状态到当前节点”补救。
 
 > 旧版 5 字段(无备注)格式自动兼容。建议通过菜单管理而非手改。
 
@@ -374,6 +374,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 
 ### 版本记录
 
+- `VolMon.sh` v1.4.7:新增节点重命名并迁移 state/snap,避免改节点名称后每日日报流量基线归零;新增旧状态迁移入口,可补救手动改名后的基线断开;状态文件记录连接信息,后续手动改名也可自动认回同一节点基线。
 - `VolMon.sh` v1.4.6 / `volmon-node.sh` v1.1.0:交互菜单改为数字/字母双键位,按任一键都可执行同一操作。
 - `VolMon.sh` v1.4.5 / `volmon-node.sh` v1.0.9:优化交互菜单排版,增加分组标题、对齐菜单项和统一输入提示。
 - `VolMon.sh` v1.4.4 / `volmon-node.sh` v1.0.8:按 ShellCheck 建议清理 `printf`、动态配置加载注释与 POSIX `read -r`。

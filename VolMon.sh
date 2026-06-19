@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.6"
+VER="1.4.7"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -116,6 +116,19 @@ safe(){ printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'; }
 st_file(){ echo "$STATE_DIR/$(safe "$1").state"; }
 snap_file(){ echo "$SNAP_DIR/$(safe "$1").snap"; }
 
+state_migrate_name(){
+  local old=$1 new=$2 old_state new_state old_snap new_snap
+  [ -z "$old" ] || [ -z "$new" ] || [ "$old" = "$new" ] && return 0
+  old_state=$(st_file "$old"); new_state=$(st_file "$new")
+  old_snap=$(snap_file "$old"); new_snap=$(snap_file "$new")
+  if [ -f "$old_state" ] && [ ! -f "$new_state" ]; then
+    mv "$old_state" "$new_state" 2>/dev/null || cp "$old_state" "$new_state" 2>/dev/null || true
+  fi
+  if [ -f "$old_snap" ] && [ ! -f "$new_snap" ]; then
+    mv "$old_snap" "$new_snap" 2>/dev/null || cp "$old_snap" "$new_snap" 2>/dev/null || true
+  fi
+}
+
 kv_get(){ local f=$1 k=$2; [ -f "$f" ] && sed -n "s/^$k=//p" "$f" | tail -1; }
 kv_set(){
   local f=$1 k=$2 v=$3
@@ -134,6 +147,38 @@ kv_set(){
   else
     echo "$k=$v" >> "$f"
   fi
+}
+
+state_record_node_meta(){
+  local name=$1 host=$2 port=$3 user=$4 key=$5 f
+  f=$(st_file "$name")
+  kv_set "$f" NODE_HOST "$host"
+  kv_set "$f" NODE_PORT "${port:-22}"
+  kv_set "$f" NODE_USER "${user:-root}"
+  kv_set "$f" NODE_KEY "$key"
+}
+
+state_adopt_by_endpoint(){
+  local name=$1 host=$2 port=$3 user=$4 key=$5 f cur_state cand stem
+  cur_state=$(st_file "$name")
+  [ -f "$cur_state" ] && return 0
+  [ -d "$STATE_DIR" ] || return 0
+  port=${port:-22}; user=${user:-root}
+  for cand in "$STATE_DIR"/*.state; do
+    [ -f "$cand" ] || continue
+    [ "$cand" = "$cur_state" ] && continue
+    [ "$(kv_get "$cand" NODE_HOST)" = "$host" ] || continue
+    [ "$(kv_get "$cand" NODE_PORT)" = "$port" ] || continue
+    [ "$(kv_get "$cand" NODE_USER)" = "$user" ] || continue
+    [ "$(kv_get "$cand" NODE_KEY)" = "$key" ] || continue
+    stem=$(basename "$cand" .state)
+    mv "$cand" "$cur_state" 2>/dev/null || cp "$cand" "$cur_state" 2>/dev/null || true
+    [ -f "$SNAP_DIR/$stem.snap" ] && mv "$SNAP_DIR/$stem.snap" "$(snap_file "$name")" 2>/dev/null || true
+    log "ADOPT_STATE $stem -> $name endpoint=$host:$port"
+    break
+  done
+  f=$(st_file "$name")
+  [ -f "$f" ] && state_record_node_meta "$name" "$host" "$port" "$user" "$key"
 }
 
 conf_quote(){
@@ -229,6 +274,8 @@ process_node(){
   [ -z "$remark" ] && remark="$name"
   local label="$remark"; [ "$remark" != "$name" ] && label="$remark ($name)"
   local f out rc prev fails
+  state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
+  state_record_node_meta "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
   out=$(do_ssh "$host" "$port" "$user" "$key"); rc=$?
   kv_set "$f" LASTCHECK "$(date '+%F %T')"
@@ -302,6 +349,7 @@ show_one_status(){
   local name=$1 host=$2 port=$3 user=$4 key=$5 remark=$6
   [ -z "$remark" ] && remark="$name"
   local f status fails last check snap
+  state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
   status=$(kv_get "$f" STATUS); fails=$(kv_get "$f" FAILS)
   last=$(kv_get "$f" LASTSEEN); check=$(kv_get "$f" LASTCHECK)
@@ -706,6 +754,63 @@ node_set_remark(){
   echo -e "${CG}已更新 [$n] 备注为: $rmk${C0}"
 }
 
+node_rename(){
+  load_conf
+  node_list
+  read -rp "要重命名的节点名称: " old
+  [ -z "$old" ] && return
+  grep -q "^$old|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
+  read -rp "新节点名称(唯一标识,英文/数字): " new
+  [ -z "$new" ] && { echo "取消"; return; }
+  case "$new" in *'|'*|*' '*)
+    echo -e "${CR}节点名称不能包含空格或 |${C0}"
+    return
+    ;;
+  esac
+  if grep -q "^$new|" "$NODES" 2>/dev/null; then
+    echo -e "${CR}已存在同名节点${C0}"
+    return
+  fi
+  read -rp "新备注名(留空=保持原备注): " new_remark
+  local tmp; tmp=$(mktemp)
+  awk -F'|' -v old="$old" -v new="$new" -v r="$new_remark" 'BEGIN{OFS="|"}{
+    if($1==old){$1=new; if(r!=""){$6=r}}
+    print
+  }' "$NODES" > "$tmp" && mv "$tmp" "$NODES"
+  state_migrate_name "$old" "$new"
+  [ -f "$BASE_DIR/install-$old.txt" ] && [ ! -f "$BASE_DIR/install-$new.txt" ] \
+    && mv "$BASE_DIR/install-$old.txt" "$BASE_DIR/install-$new.txt" 2>/dev/null || true
+  log "RENAME $old -> $new"
+  echo -e "${CG}已重命名: $old -> $new，并迁移状态/快照${C0}"
+}
+
+node_migrate_state(){
+  load_conf
+  node_list
+  echo
+  echo -e "${CB}已有状态文件:${C0}"
+  if ls "$STATE_DIR"/*.state >/dev/null 2>&1; then
+    local sf
+    for sf in "$STATE_DIR"/*.state; do
+      echo -e "  ${CC}$(basename "$sf" .state)${C0}"
+    done
+  else
+    echo "  (空)"
+  fi
+  read -rp "旧状态名称: " old
+  read -rp "迁移到当前节点名称: " target
+  [ -z "$old" ] || [ -z "$target" ] && { echo "取消"; return; }
+  [ -f "$(st_file "$old")" ] || { echo -e "${CR}未找到旧状态: $old${C0}"; return; }
+  grep -q "^$target|" "$NODES" || { echo -e "${CR}未找到当前节点: $target${C0}"; return; }
+  state_migrate_name "$old" "$target"
+  local line host port user key
+  line=$(grep "^$target|" "$NODES" | head -1)
+  IFS='|' read -r _ host port user key _ <<< "$line"
+  state_record_node_meta "$target" "$host" "$port" "$user" "$key"
+  log "MIGRATE_STATE $old -> $target"
+  echo -e "${CG}已迁移旧状态: $old -> $target${C0}"
+}
+
 node_del(){
   load_conf
   node_list
@@ -1102,14 +1207,18 @@ menu(){
           menu_group "节点"
           menu_item "1/a" "添加节点"
           menu_item "2/e" "修改备注"
-          menu_item "3/d" "删除节点"
+          menu_item "3/r" "重命名节点" "迁移日报基线/状态"
+          menu_item "4/m" "迁移旧状态到当前节点" "修复手动改名后的基线"
+          menu_item "5/d" "删除节点"
           menu_item "0/b" "返回"
           echo
           menu_prompt; read -r s || break
           case "$s" in
             1|a|A) node_add; pause ;;
             2|e|E) node_set_remark; pause ;;
-            3|d|D) node_del; pause ;;
+            3|r|R) node_rename; pause ;;
+            4|m|M) node_migrate_state; pause ;;
+            5|d|D) node_del; pause ;;
             0|b|B|"") break ;;
           esac
         done ;;
