@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.9"
+VER="1.1.0"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -246,7 +246,7 @@ do_update(){
 menu_group(){ say ""; say "  ${GR}── $1${N}"; }
 menu_item(){
   key=$1; label=$2; hint=${3:-}
-  printf '  %b%-4s%b %s' "$B$C" "$key" "$N" "$label"
+  printf '  %b%-6s%b %s' "$B$C" "$key" "$N" "$label"
   [ -n "$hint" ] && printf ' %b- %s%b' "$GR" "$hint" "$N"
   printf '\n'
 }
@@ -260,27 +260,27 @@ menu(){
     say "${GR}  安装受限监控公钥 · 被控端零常驻${N}"
     say "${C}  ────────────────────────────────────────${N}"
     menu_group "安装"
-    menu_item "1" "粘贴主控公钥并安装" "推荐,私钥不离开主控"
-    menu_item "2" "本机生成密钥对" "打印私钥转交主控"
+    menu_item "1/a" "粘贴主控公钥并安装" "推荐,私钥不离开主控"
+    menu_item "2/g" "本机生成密钥对" "打印私钥转交主控"
     menu_group "维护"
-    menu_item "3" "查看本机状态"
-    menu_item "4" "卸载受限公钥与采集脚本"
-    menu_item "5" "修改来源 IP 限制" "from="
-    menu_item "u" "检查更新"
-    menu_item "0" "退出"
+    menu_item "3/s" "查看本机状态"
+    menu_item "4/r" "卸载受限公钥与采集脚本"
+    menu_item "5/f" "修改来源 IP 限制" "from="
+    menu_item "6/u" "检查更新"
+    menu_item "0/q" "退出"
     echo
     menu_prompt; read -r ch
     case "$ch" in
-      1)
+      1|a|A)
         say "${GR}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${N}"
         read -r pub
         [ -z "$pub" ] && { say "取消"; pause; continue; }
         printf "限制来源 IP(主控IP,可逗号分隔多个;留空=不限制): "; read -r fip
         install_pubkey "$pub" "$fip"; pause ;;
-      2) gen_key; pause ;;
-      3) do_local; pause ;;
-      4) uninstall; pause ;;
-      5)
+      2|g|G) gen_key; pause ;;
+      3|s|S) do_local; pause ;;
+      4|r|R) uninstall; pause ;;
+      5|f|F)
         cur=$(current_from)
         say "当前来源限制: ${C}${cur:-无(任意IP)}${N}"
         printf "新的来源 IP(主控IP/CIDR/逗号列表;输入 no 取消限制;回车放弃修改): "; read -r nf
@@ -290,8 +290,8 @@ menu(){
           *) set_from "$nf" ;;
         esac
         pause ;;
-      u|U) do_update; pause ;;
-      0|q) exit 0 ;;
+      6|u|U) do_update; pause ;;
+      0|q|Q) exit 0 ;;
       *) say "${R}无效选择${N}"; pause ;;
     esac
   done

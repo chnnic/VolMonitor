@@ -17,7 +17,7 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
-当前版本:`VolMon.sh` v1.4.5;`volmon-node.sh` v1.0.9。
+当前版本:`VolMon.sh` v1.4.6;`volmon-node.sh` v1.1.0。
 
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
@@ -206,7 +206,7 @@ VolMon.sh [run|status|local|daemon|test-tg|report|node-key|shortcut|update|menu]
 | `shortcut` | 安装 `volmon` 快捷命令 |
 | `update` | 从 GitHub 更新到最新版 |
 
-交互菜单:`1` 拉取并显示 · `2` 状态总览 · `3` 节点管理(增/删/改备注/列) · `4` Telegram 配置+测试+每日日报 · `5`/`6` 安装/移除 cron · `7` 被控机功能 · `8` daemon · `9` 密钥管理 · `s` 安装 volmon 快捷命令 · `c` 设置(编辑 config) · `u` 检查更新 · `0` 退出
+交互菜单支持数字/字母双键位,例如 `1/r` 拉取并显示、`3/n` 节点管理、`4/t` Telegram、`10/c` 设置、`0/q` 退出;按数字或字母任一键都可执行。
 
 ### volmon-node.sh(被控)
 
@@ -374,6 +374,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 
 ### 版本记录
 
+- `VolMon.sh` v1.4.6 / `volmon-node.sh` v1.1.0:交互菜单改为数字/字母双键位,按任一键都可执行同一操作。
 - `VolMon.sh` v1.4.5 / `volmon-node.sh` v1.0.9:优化交互菜单排版,增加分组标题、对齐菜单项和统一输入提示。
 - `VolMon.sh` v1.4.4 / `volmon-node.sh` v1.0.8:按 ShellCheck 建议清理 `printf`、动态配置加载注释与 POSIX `read -r`。
 - `VolMon.sh` v1.4.3 / `volmon-node.sh` v1.0.7:修复 `local` / `status` 成功输出后退出码为 1 的问题;加固配置写入、SSH 私钥参数传递与临时密钥生成;仓库脚本文件设置为可执行。
