@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.2"
+VER="1.4.3"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -119,12 +119,25 @@ snap_file(){ echo "$SNAP_DIR/$(safe "$1").snap"; }
 kv_get(){ local f=$1 k=$2; [ -f "$f" ] && sed -n "s/^$k=//p" "$f" | tail -1; }
 kv_set(){
   local f=$1 k=$2 v=$3
+  local tmp line found=0
   mkdir -p "$(dirname "$f")"
-  if [ -f "$f" ] && grep -q "^$k=" "$f"; then
-    sed -i "s|^$k=.*|$k=$v|" "$f"
+  if [ -f "$f" ]; then
+    tmp=$(mktemp) || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$k="*) printf '%s=%s\n' "$k" "$v"; found=1 ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$f" > "$tmp" || { rm -f "$tmp"; return 1; }
+    [ "$found" = "1" ] || printf '%s=%s\n' "$k" "$v" >> "$tmp"
+    mv "$tmp" "$f"
   else
     echo "$k=$v" >> "$f"
   fi
+}
+
+conf_quote(){
+  awk -v s="$1" 'BEGIN{gsub(/\047/, "\047\\\047\047", s); printf "\047%s\047", s}'
 }
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
@@ -150,13 +163,16 @@ tg_send(){
 #  SSH 拉取(主控 -> 被控,内嵌脚本不落地)
 # =============================================================
 do_ssh(){
-  local host=$1 port=$2 user=$3 key=$4 kopt=""
+  local host=$1 port=$2 user=$3 key=$4
+  local ssh_key=""
+  local ssh_args=()
   key="${key/#\~/$HOME}"
-  if [ -n "$key" ]; then kopt="-i $key"
+  if [ -n "$key" ]; then ssh_key=$key
   elif [ -n "$SSH_KEY" ]; then
-    local gk="${SSH_KEY/#\~/$HOME}"; kopt="-i $gk"
+    ssh_key="${SSH_KEY/#\~/$HOME}"
   fi
-  printf '%s\n' "$COLLECTOR" | ssh $kopt -p "${port:-22}" \
+  [ -n "$ssh_key" ] && ssh_args=(-i "$ssh_key")
+  printf '%s\n' "$COLLECTOR" | ssh "${ssh_args[@]}" -p "${port:-22}" \
     -o ConnectTimeout="${SSH_TIMEOUT:-8}" \
     -o BatchMode=yes \
     -o StrictHostKeyChecking=accept-new \
@@ -202,6 +218,7 @@ EOF
   [ -n "$mt" ] && echo -e "  内存 ${mu}/${mt} MB (${mp}%)   磁盘 ${du}/${dt} (${dp})"
   echo -e "  流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
   [ -n "$svcs" ] && echo -e "  服务 ${CG}${svcs}${C0}"
+  return 0
 }
 
 # =============================================================
@@ -324,6 +341,7 @@ do_local(){
   local host; host=$(field HOST "$out"); local t; t=$(field TIME "$out")
   echo -e "${CB}● 本机 ${CG}${host}${C0}  ${CGRY}${t}${C0}"
   render_one "$host" "$out"
+  return 0
 }
 
 # =============================================================
@@ -392,15 +410,17 @@ node_key_menu(){
           echo -e "${CR}本机无 ssh-keygen(OpenWrt/Dropbear 常见)。请改用方式 1,在主控生成后粘贴公钥。${C0}"
           pause; continue
         fi
-        local tmp; tmp=$(mktemp -u "${TMPDIR:-/tmp}/volmon_key.XXXXXX")
-        ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { echo -e "${CR}生成失败${C0}"; pause; continue; }
+        local tmpdir tmp; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/volmon_key.XXXXXX") || { echo -e "${CR}创建临时目录失败${C0}"; pause; continue; }
+        chmod 700 "$tmpdir" 2>/dev/null
+        tmp="$tmpdir/key"
+        ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { echo -e "${CR}生成失败${C0}"; rm -rf "$tmpdir"; pause; continue; }
         node_install_pubkey "$(cat "$tmp.pub")"
         echo
         echo -e "${CY}===== 以下私钥请复制到【主控】(菜单9导入),然后从本机抹除 =====${C0}"
         cat "$tmp"
         echo -e "${CY}================================================================${C0}"
         shred -u "$tmp" 2>/dev/null || rm -f "$tmp"
-        rm -f "$tmp.pub"
+        rm -f "$tmp.pub"; rmdir "$tmpdir" 2>/dev/null
         echo -e "${CGRY}本机私钥已删除,只保留受限公钥${C0}"; pause ;;
       u)
         local ak="$HOME/.ssh/authorized_keys"
@@ -592,7 +612,7 @@ key_menu(){
         [ -z "$kn" ] && continue
         local f; f=$(key_path "$kn")
         [ -f "$f" ] || { echo -e "${CR}未找到${C0}"; pause; continue; }
-        kv_set "$CONF" SSH_KEY "\"$f\""; . "$CONF"
+        kv_set "$CONF" SSH_KEY "$(conf_quote "$f")"; . "$CONF"
         echo -e "${CG}全局默认密钥已设为: $f${C0}"; pause ;;
       b|"") break ;;
     esac
@@ -710,8 +730,8 @@ tg_config(){
   echo -e "当前: TOKEN=${TG_BOT_TOKEN:-未设置}  CHAT_ID=${TG_CHAT_ID:-未设置}"
   read -rp "Bot Token (回车跳过): " t
   read -rp "Chat ID  (回车跳过): " c
-  [ -n "$t" ] && kv_set "$CONF" TG_BOT_TOKEN "\"$t\""
-  [ -n "$c" ] && kv_set "$CONF" TG_CHAT_ID "\"$c\""
+  [ -n "$t" ] && kv_set "$CONF" TG_BOT_TOKEN "$(conf_quote "$t")"
+  [ -n "$c" ] && kv_set "$CONF" TG_CHAT_ID "$(conf_quote "$c")"
   . "$CONF"
   echo -e "${CG}已保存${C0}"
 }
@@ -987,7 +1007,7 @@ config_menu(){
       1) read -rp "新阈值(正整数): " v; is_int "$v" && kv_set "$CONF" FAIL_THRESHOLD "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
       2) read -rp "新超时秒数(正整数): " v; is_int "$v" && kv_set "$CONF" SSH_TIMEOUT "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
       3) read -rp "私钥路径(可填密钥名/路径,留空跳过): " v
-         [ -n "$v" ] && { v=$(resolve_key "$v"); kv_set "$CONF" SSH_KEY "\"$v\""; echo -e "${CG}已设为 $v${C0}"; }
+         [ -n "$v" ] && { v=$(resolve_key "$v"); kv_set "$CONF" SSH_KEY "$(conf_quote "$v")"; echo -e "${CG}已设为 $v${C0}"; }
          pause ;;
       4) read -rp "磁盘告警开关 1=开 0=关: " v
          case "$v" in 0|1) kv_set "$CONF" ENABLE_METRIC_ALERTS "$v" ;; *) echo -e "${CR}只能 0 或 1${C0}" ;; esac; pause ;;
@@ -999,7 +1019,7 @@ config_menu(){
         case "$yn" in y|Y)
           kv_set "$CONF" FAIL_THRESHOLD 3
           kv_set "$CONF" SSH_TIMEOUT 8
-          kv_set "$CONF" SSH_KEY "\"\$HOME/.ssh/id_ed25519\""
+          kv_set "$CONF" SSH_KEY "'$HOME/.ssh/id_ed25519'"
           kv_set "$CONF" ENABLE_METRIC_ALERTS 1
           kv_set "$CONF" DISK_WARN 90
           kv_set "$CONF" DAEMON_INTERVAL 30

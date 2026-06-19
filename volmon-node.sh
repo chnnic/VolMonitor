@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.6"
+VER="1.0.7"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -114,15 +114,17 @@ gen_key(){
     say "${Y}请在主控生成密钥后,用 add 粘贴公钥安装。${N}"
     return 1
   fi
-  tmp=$(mktemp -u "${TMPDIR:-/tmp}/volmon_key.XXXXXX")
-  ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { say "${R}生成失败${N}"; return 1; }
-  install_pubkey "$(cat "$tmp.pub")" || { rm -f "$tmp" "$tmp.pub"; return 1; }
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/volmon_key.XXXXXX") || { say "${R}创建临时目录失败${N}"; return 1; }
+  chmod 700 "$tmpdir" 2>/dev/null
+  tmp="$tmpdir/key"
+  ssh-keygen -t ed25519 -N "" -C "volmon-monitor" -f "$tmp" -q || { say "${R}生成失败${N}"; rm -rf "$tmpdir"; return 1; }
+  install_pubkey "$(cat "$tmp.pub")" || { rm -rf "$tmpdir"; return 1; }
   echo
   say "${Y}===== 以下私钥请复制到【主控】导入,然后从本机抹除 =====${N}"
   cat "$tmp"
   say "${Y}=========================================================${N}"
   shred -u "$tmp" 2>/dev/null || rm -f "$tmp"
-  rm -f "$tmp.pub"
+  rm -f "$tmp.pub"; rmdir "$tmpdir" 2>/dev/null
   say "${GR}本机私钥已删除,只保留受限公钥${N}"
 }
 
@@ -192,6 +194,7 @@ EOF
   [ -n "$mt" ] && say "  内存 ${mu}/${mt} MB (${mp}%)   磁盘 ${du}/${dt} (${dp})"
   say "  流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
   [ -n "$svcs" ] && say "  服务 ${G}${svcs}${N}"
+  return 0
 }
 
 # =============================================================
