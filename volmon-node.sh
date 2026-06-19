@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.7"
+VER="1.0.8"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -19,7 +19,7 @@ else
 fi
 say(){ printf '%b\n' "$*"; }
 cls(){ [ -t 1 ] && { clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }; }
-pause(){ [ -t 0 ] && { printf "\n${GR}按回车返回...${N}"; read -r _; }; }
+pause(){ [ -t 0 ] && { printf '\n%b按回车返回...%b' "$GR" "$N"; read -r _; }; }
 
 # =============================================================
 #  只读采集脚本(与主控内嵌版一致;POSIX sh)
@@ -186,7 +186,7 @@ do_local(){
   du=$(field DISK_USED "$out"); dt=$(field DISK_TOTAL "$out"); dp=$(field DISK_PCT "$out")
   est=$(field TCP_EST "$out")
   svcs=$(printf '%s\n' "$out" | sed -n 's/^SVC=//p' | tr '\n' ' ')
-  read rxg txg <<EOF
+  read -r rxg txg <<EOF
 $(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4}END{printf "%.2f %.2f",rx/1073741824,tx/1073741824}')
 EOF
   say "${B}● 本机 ${G}${host}${N}  ${GR}${t}${N}"

@@ -17,7 +17,7 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
-当前版本:`VolMon.sh` v1.4.3;`volmon-node.sh` v1.0.7。
+当前版本:`VolMon.sh` v1.4.4;`volmon-node.sh` v1.0.8。
 
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
@@ -374,6 +374,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 
 ### 版本记录
 
+- `VolMon.sh` v1.4.4 / `volmon-node.sh` v1.0.8:按 ShellCheck 建议清理 `printf`、动态配置加载注释与 POSIX `read -r`。
 - `VolMon.sh` v1.4.3 / `volmon-node.sh` v1.0.7:修复 `local` / `status` 成功输出后退出码为 1 的问题;加固配置写入、SSH 私钥参数传递与临时密钥生成;仓库脚本文件设置为可执行。
 - `VolMon.sh` v1.4.2:完善每日日报说明与更新流程。
 

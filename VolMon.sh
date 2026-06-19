@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.3"
+VER="1.4.4"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -30,7 +30,7 @@ else
 fi
 
 cls(){ [ -t 1 ] && { clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }; }
-pause(){ [ -t 0 ] && { printf "\n${CGRY}按回车返回...${C0}"; read -r _; }; }
+pause(){ [ -t 0 ] && { printf '\n%b按回车返回...%b' "$CGRY" "$C0"; read -r _; }; }
 
 # =============================================================
 #  内嵌采集脚本(在被控机上以 sh 执行,POSIX 兼容,无落地)
@@ -612,7 +612,9 @@ key_menu(){
         [ -z "$kn" ] && continue
         local f; f=$(key_path "$kn")
         [ -f "$f" ] || { echo -e "${CR}未找到${C0}"; pause; continue; }
-        kv_set "$CONF" SSH_KEY "$(conf_quote "$f")"; . "$CONF"
+        kv_set "$CONF" SSH_KEY "$(conf_quote "$f")"
+        # shellcheck disable=SC1090
+        . "$CONF"
         echo -e "${CG}全局默认密钥已设为: $f${C0}"; pause ;;
       b|"") break ;;
     esac
@@ -732,6 +734,7 @@ tg_config(){
   read -rp "Chat ID  (回车跳过): " c
   [ -n "$t" ] && kv_set "$CONF" TG_BOT_TOKEN "$(conf_quote "$t")"
   [ -n "$c" ] && kv_set "$CONF" TG_CHAT_ID "$(conf_quote "$c")"
+  # shellcheck disable=SC1090
   . "$CONF"
   echo -e "${CG}已保存${C0}"
 }
