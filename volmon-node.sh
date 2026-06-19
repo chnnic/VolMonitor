@@ -5,7 +5,7 @@
 #  拿不到 shell、禁止端口/agent/X11 转发、不分配 pty,泄露也基本无害。
 #  纯 POSIX sh,兼容 Debian/Ubuntu/Alpine/OpenWrt(OpenSSH 与 Dropbear)。
 # =============================================================
-VER="1.0.8"
+VER="1.0.9"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -243,6 +243,15 @@ do_update(){
 # =============================================================
 #  菜单
 # =============================================================
+menu_group(){ say ""; say "  ${GR}── $1${N}"; }
+menu_item(){
+  key=$1; label=$2; hint=${3:-}
+  printf '  %b%-4s%b %s' "$B$C" "$key" "$N" "$label"
+  [ -n "$hint" ] && printf ' %b- %s%b' "$GR" "$hint" "$N"
+  printf '\n'
+}
+menu_prompt(){ printf '%b选择命令%b > ' "$B" "$N"; }
+
 menu(){
   while :; do
     cls
@@ -250,16 +259,17 @@ menu(){
     say "${B}${C}  VolMonitor 被控机助手${N}   ${GR}v${VER}${N}"
     say "${GR}  安装受限监控公钥 · 被控端零常驻${N}"
     say "${C}  ────────────────────────────────────────${N}"
+    menu_group "安装"
+    menu_item "1" "粘贴主控公钥并安装" "推荐,私钥不离开主控"
+    menu_item "2" "本机生成密钥对" "打印私钥转交主控"
+    menu_group "维护"
+    menu_item "3" "查看本机状态"
+    menu_item "4" "卸载受限公钥与采集脚本"
+    menu_item "5" "修改来源 IP 限制" "from="
+    menu_item "u" "检查更新"
+    menu_item "0" "退出"
     echo
-    say "  ${B}1${N}) 粘贴主控公钥并安装(推荐,私钥不离开主控)"
-    say "  ${B}2${N}) 本机生成密钥对(打印私钥转交主控)"
-    say "  ${B}3${N}) 查看本机状态"
-    say "  ${B}4${N}) 卸载受限公钥与采集脚本"
-    say "  ${B}5${N}) 修改来源 IP 限制(from=)"
-    say "  ${B}u${N}) 检查更新(从 GitHub)"
-    say "  ${B}0${N}) 退出"
-    echo
-    printf "选择: "; read -r ch
+    menu_prompt; read -r ch
     case "$ch" in
       1)
         say "${GR}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${N}"

@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.4"
+VER="1.4.5"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -394,11 +394,14 @@ node_key_menu(){
   load_conf
   while true; do
     cls; banner "被控机 · 受限监控公钥"; echo
-    echo -e "  ${CB}1${C0}) 粘贴主控公钥并安装(推荐,私钥不离开主控)"
-    echo -e "  ${CB}2${C0}) 本机生成密钥对(打印私钥转交主控)"
-    echo -e "  ${CB}u${C0}) 卸载受限公钥与采集脚本"
-    echo -e "  ${CB}b${C0}) 返回"
-    read -rp "选择: " s || break
+    menu_group "安装"
+    menu_item "1" "粘贴主控公钥并安装" "推荐,私钥不离开主控"
+    menu_item "2" "本机生成密钥对" "打印私钥转交主控"
+    menu_group "维护"
+    menu_item "u" "卸载受限公钥与采集脚本"
+    menu_item "b" "返回"
+    echo
+    menu_prompt; read -r s || break
     case "$s" in
       1)
         echo -e "${CGRY}粘贴主控的【公钥】单行内容(ssh-ed25519 AAAA... 形式):${C0}"
@@ -600,8 +603,14 @@ key_del(){
 key_menu(){
   while true; do
     cls; banner "密钥管理"; echo; key_list; echo
-    echo -e "  ${CB}i${C0}) 导入  ${CB}n${C0}) 新建密钥对  ${CB}d${C0}) 删除  ${CB}g${C0}) 设为全局默认密钥  ${CB}b${C0}) 返回"
-    read -rp "选择: " s || break
+    menu_group "操作"
+    menu_item "i" "导入私钥"
+    menu_item "n" "新建密钥对"
+    menu_item "d" "删除密钥"
+    menu_item "g" "设为全局默认密钥"
+    menu_item "b" "返回"
+    echo
+    menu_prompt; read -r s || break
     case "$s" in
       i) key_import; pause ;;
       n|N) key_generate; pause ;;
@@ -744,10 +753,12 @@ tg_test(){
   if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
     echo -e "${CR}请先配置 Token / Chat ID${C0}"; return
   fi
-  echo -e "  ${CB}1${C0}) 普通测试消息"
-  echo -e "  ${CB}2${C0}) 模拟「离线告警」推送样式"
-  echo -e "  ${CB}3${C0}) 模拟「恢复通知」推送样式"
-  read -rp "选择: " t
+  menu_group "测试消息"
+  menu_item "1" "普通测试消息"
+  menu_item "2" "模拟离线告警"
+  menu_item "3" "模拟恢复通知"
+  echo
+  menu_prompt; read -r t
   local now; now=$(date '+%F %T %Z')
   local ok=1
   case "$t" in
@@ -764,9 +775,14 @@ tg_menu(){
   while true; do
     load_conf
     cls; banner "Telegram 配置 + 测试"; echo
-    echo -e "  TOKEN:${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}  CHAT_ID:${TG_CHAT_ID:-未设置}"
-    echo -e "  ${CB}c${C0}) 配置 Token / Chat ID   ${CB}t${C0}) 测试推送   ${CB}r${C0}) 每日日报   ${CB}b${C0}) 返回"
-    read -rp "选择: " s || break
+    echo -e "  ${CGRY}Token:${C0} ${TG_BOT_TOKEN:+已设置}${TG_BOT_TOKEN:-未设置}   ${CGRY}Chat ID:${C0} ${TG_CHAT_ID:-未设置}"
+    menu_group "Telegram"
+    menu_item "c" "配置 Token / Chat ID"
+    menu_item "t" "测试推送"
+    menu_item "r" "每日日报"
+    menu_item "b" "返回"
+    echo
+    menu_prompt; read -r s || break
     case "$s" in c) tg_config; pause ;; t) tg_test; pause ;; r) report_menu ;; b|"") break ;; esac
   done
 }
@@ -962,9 +978,13 @@ report_menu(){
     local cur; cur=$(crontab -l 2>/dev/null | grep '# volmon-report')
     echo -e "  当前状态: ${cur:+${CG}已启用${C0}}${cur:-${CGRY}未启用${C0}}"
     [ -n "$cur" ] && echo -e "  ${CGRY}$(echo "$cur" | awk '{print $2":"$1}' | sed 's/:/ 时 /;s/$/ 分/')${C0}"
+    menu_group "日报"
+    menu_item "e" "启用 / 设置时间"
+    menu_item "x" "关闭日报"
+    menu_item "t" "立即发送一次"
+    menu_item "b" "返回"
     echo
-    echo -e "  ${CB}e${C0}) 启用 / 设置时间   ${CB}x${C0}) 关闭   ${CB}t${C0}) 立即发送一次   ${CB}b${C0}) 返回"
-    read -rp "选择: " s || break
+    menu_prompt; read -r s || break
     case "$s" in
       e) report_install; pause ;;
       x) report_remove; pause ;;
@@ -989,6 +1009,15 @@ banner(){   # $1 = 可选副标题(子菜单名)
   echo -e "${CC}  ────────────────────────────────────────${C0}"
 }
 
+menu_group(){ echo -e "\n  ${CGRY}── $1${C0}"; }
+menu_item(){
+  local key=$1 label=$2 hint=${3:-}
+  printf '  %b%-4s%b %s' "$CB$CC" "$key" "$C0" "$label"
+  [ -n "$hint" ] && printf ' %b- %s%b' "$CGRY" "$hint" "$C0"
+  printf '\n'
+}
+menu_prompt(){ printf '%b选择命令%b > ' "$CB" "$C0"; }
+
 is_int(){ case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 config_menu(){
@@ -996,16 +1025,19 @@ config_menu(){
     load_conf
     cls; banner "设置 config"
     echo -e "  ${CGRY}配置文件: $CONF${C0}"
+    menu_group "运行参数"
+    menu_item "1" "连续失败判离线阈值" "FAIL_THRESHOLD=$FAIL_THRESHOLD"
+    menu_item "2" "SSH 连接超时" "SSH_TIMEOUT=${SSH_TIMEOUT}s"
+    menu_item "3" "全局默认私钥" "SSH_KEY=$SSH_KEY"
+    menu_item "4" "磁盘告警开关" "ENABLE_METRIC_ALERTS=$ENABLE_METRIC_ALERTS"
+    menu_item "5" "磁盘告警阈值" "DISK_WARN=${DISK_WARN}%"
+    menu_item "6" "daemon 轮询间隔" "DAEMON_INTERVAL=${DAEMON_INTERVAL}s"
+    menu_group "文件"
+    menu_item "e" "用编辑器打开配置"
+    menu_item "r" "恢复操作类设置为默认" "不影响 Telegram"
+    menu_item "b" "返回"
     echo
-    echo -e "  ${CB}1${C0}) 连续失败判离线阈值   FAIL_THRESHOLD = ${CC}${FAIL_THRESHOLD}${C0}"
-    echo -e "  ${CB}2${C0}) SSH 连接超时(秒)     SSH_TIMEOUT    = ${CC}${SSH_TIMEOUT}${C0}"
-    echo -e "  ${CB}3${C0}) 全局默认私钥           SSH_KEY        = ${CC}${SSH_KEY}${C0}"
-    echo -e "  ${CB}4${C0}) 磁盘告警开关(1/0)     ENABLE_METRIC_ALERTS = ${CC}${ENABLE_METRIC_ALERTS}${C0}"
-    echo -e "  ${CB}5${C0}) 磁盘告警阈值(%)       DISK_WARN      = ${CC}${DISK_WARN}${C0}"
-    echo -e "  ${CB}6${C0}) daemon 轮询间隔(秒)   DAEMON_INTERVAL= ${CC}${DAEMON_INTERVAL}${C0}"
-    echo
-    echo -e "  ${CB}e${C0}) 用编辑器打开   ${CB}r${C0}) 恢复默认值   ${CB}b${C0}) 返回"
-    read -rp "选择: " s || break
+    menu_prompt; read -r s || break
     case "$s" in
       1) read -rp "新阈值(正整数): " v; is_int "$v" && kv_set "$CONF" FAIL_THRESHOLD "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
       2) read -rp "新超时秒数(正整数): " v; is_int "$v" && kv_set "$CONF" SSH_TIMEOUT "$v" || echo -e "${CR}需正整数${C0}"; pause ;;
@@ -1038,30 +1070,37 @@ menu(){
   while true; do
     cls
     banner
+    menu_group "监控"
+    menu_item "1" "立即拉取并显示所有节点"
+    menu_item "2" "查看本地状态总览" "最后检测 / 最后在线"
+    menu_item "8" "前台 daemon 轮询"
+    menu_group "配置"
+    menu_item "3" "节点管理" "添加 / 删除 / 备注"
+    menu_item "4" "Telegram 与日报"
+    menu_item "9" "密钥管理" "导入 / 新建 / 删除"
+    menu_item "c" "设置 config"
+    menu_group "系统"
+    menu_item "5" "安装 cron 定时拉取"
+    menu_item "6" "移除 cron"
+    menu_item "7" "被控机功能"
+    menu_item "s" "安装启动快捷命令 volmon"
+    menu_item "u" "检查更新"
+    menu_item "0" "退出"
     echo
-    echo -e "  ${CB}1${C0}) 拉取一次并显示所有节点状态"
-    echo -e "  ${CB}2${C0}) 状态总览(最后检测 / 最后在线)"
-    echo -e "  ${CB}3${C0}) 节点管理(增 / 删 / 改备注 / 列)"
-    echo -e "  ${CB}4${C0}) Telegram 配置 + 测试推送"
-    echo -e "  ${CB}5${C0}) 安装 cron 定时拉取"
-    echo -e "  ${CB}6${C0}) 移除 cron"
-    echo -e "  ${CB}7${C0}) 被控机功能(本机状态 / 安装受限公钥)"
-    echo -e "  ${CB}8${C0}) 前台 daemon 轮询"
-    echo -e "  ${CB}9${C0}) 密钥管理(导入 / 列出 / 删除)"
-    echo -e "  ${CB}s${C0}) 安装启动快捷命令 volmon"
-    echo -e "  ${CB}c${C0}) 设置(编辑 config)"
-    echo -e "  ${CB}u${C0}) 检查更新(从 GitHub)"
-    echo -e "  ${CB}0${C0}) 退出"
-    echo
-    read -rp "选择: " ch || exit 0
+    menu_prompt; read -r ch || exit 0
     case "$ch" in
       1) VERBOSE=1 do_run; pause ;;
       2) do_status; pause ;;
       3)
         while true; do
           cls; banner "节点管理"; echo; node_list; echo
-          echo -e "  ${CB}a${C0}) 添加  ${CB}e${C0}) 改备注  ${CB}d${C0}) 删除  ${CB}b${C0}) 返回"
-          read -rp "选择: " s || break
+          menu_group "节点"
+          menu_item "a" "添加节点"
+          menu_item "e" "修改备注"
+          menu_item "d" "删除节点"
+          menu_item "b" "返回"
+          echo
+          menu_prompt; read -r s || break
           case "$s" in a) node_add; pause ;; e) node_set_remark; pause ;; d) node_del; pause ;; b|"") break ;; esac
         done ;;
       4) tg_menu ;;
@@ -1070,8 +1109,12 @@ menu(){
       7)
         while true; do
           cls; banner "被控机功能"; echo
-          echo -e "  ${CB}v${C0}) 查看本机状态  ${CB}k${C0}) 安装受限监控公钥  ${CB}b${C0}) 返回"
-          read -rp "选择: " s || break
+          menu_group "被控机"
+          menu_item "v" "查看本机状态"
+          menu_item "k" "安装受限监控公钥"
+          menu_item "b" "返回"
+          echo
+          menu_prompt; read -r s || break
           case "$s" in v) do_local; pause ;; k) node_key_menu ;; b|"") break ;; esac
         done ;;
       8) do_daemon ;;
