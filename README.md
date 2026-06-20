@@ -17,7 +17,7 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
-当前版本:`VolMon.sh` v1.4.7;`volmon-node.sh` v1.1.0。
+当前版本:`VolMon.sh` v1.4.8;`volmon-node.sh` v1.1.0。
 
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
@@ -374,6 +374,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 
 ### 版本记录
 
+- `VolMon.sh` v1.4.8:修复部分 Linux `awk` 使用 `%d` 汇总累计流量时被截断为 `2147483647`，导致大流量节点日报始终显示 `0.00G` 的问题；首次正确采集时自动重置已截顶的旧基准线。
 - `VolMon.sh` v1.4.7:新增节点重命名并迁移 state/snap,避免改节点名称后每日日报流量基线归零;新增旧状态迁移入口,可补救手动改名后的基线断开;状态文件记录连接信息,后续手动改名也可自动认回同一节点基线。
 - `VolMon.sh` v1.4.6 / `volmon-node.sh` v1.1.0:交互菜单改为数字/字母双键位,按任一键都可执行同一操作。
 - `VolMon.sh` v1.4.5 / `volmon-node.sh` v1.0.9:优化交互菜单排版,增加分组标题、对齐菜单项和统一输入提示。

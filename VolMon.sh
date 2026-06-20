@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.7"
+VER="1.4.8"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -295,8 +295,11 @@ process_node(){
     # 记录当日流量(累计字节;基线为当天首次成功值)
     local curx cutx
     read -r curx cutx <<EOF
-$(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4} END{printf "%d %d",rx,tx}')
+$(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4} END{printf "%.0f %.0f",rx,tx}')
 EOF
+    # Repair baselines previously saturated by awk's 32-bit %d conversion.
+    [ "$(kv_get "$f" RX_BASE)" = "2147483647" ] && kv_set "$f" RX_BASE "$curx"
+    [ "$(kv_get "$f" TX_BASE)" = "2147483647" ] && kv_set "$f" TX_BASE "$cutx"
     [ -z "$(kv_get "$f" RX_BASE)" ] && { kv_set "$f" RX_BASE "$curx"; kv_set "$f" TX_BASE "$cutx"; }
     kv_set "$f" RX_NOW "$curx"; kv_set "$f" TX_NOW "$cutx"
     if [ "$prev" = "DOWN" ]; then
