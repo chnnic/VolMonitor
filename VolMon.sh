@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.15"
+VER="1.4.16"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -207,31 +207,37 @@ days_in_month(){
   local ym=$1
   date -d "${ym}-01 +1 month -1 day" '+%d' 2>/dev/null | sed 's/^0*//'
 }
+monthly_reset_date(){
+  local ym=$1 dom=$2 y m dim
+  y=${ym%%-*}; m=${ym#*-}
+  dim=$(days_in_month "$ym"); [ -n "$dim" ] || return 1
+  if [ "$dom" -gt "$dim" ]; then
+    date -d "${ym}-01 +1 month" '+%F' 2>/dev/null
+  else
+    printf '%04d-%02d-%02d\n' "$y" "$m" "$dom"
+  fi
+}
 monthly_cycle_start(){
-  local dom=$1 ref=${2:-$(date '+%F')} y m d dim this prev
-  d=${ref##*-}; d=$((10#$d))
+  local dom=$1 ref=${2:-$(date '+%F')} y m this prev_ym
   y=${ref%%-*}; m=${ref#*-}; m=${m%%-*}
-  dim=$(days_in_month "${y}-${m}"); [ -n "$dim" ] || return 1
-  [ "$dom" -gt "$dim" ] && dom=$dim
-  this=$(printf '%04d-%02d-%02d' "$y" "$m" "$dom")
-  if [ "$d" -lt "$dom" ]; then
-    prev=$(date -d "$this -1 month" '+%F' 2>/dev/null) || return 1
-    y=${prev%%-*}; m=${prev#*-}; m=${m%%-*}
-    dim=$(days_in_month "${y}-${m}"); [ -n "$dim" ] || return 1
-    [ "$dom" -gt "$dim" ] && dom=$dim
-    printf '%04d-%02d-%02d' "$y" "$m" "$dom"
+  this=$(monthly_reset_date "${y}-${m}" "$dom") || return 1
+  if [ "$(date_to_epoch "$ref")" -lt "$(date_to_epoch "$this")" ]; then
+    prev_ym=$(date -d "${y}-${m}-01 -1 month" '+%Y-%m' 2>/dev/null) || return 1
+    monthly_reset_date "$prev_ym" "$dom"
   else
     printf '%s\n' "$this"
   fi
 }
 monthly_next_reset(){
-  local last=$1 dom=$2 base ny nm dim
+  local last=$1 dom=$2 y m ym next_ym candidate
   [ -n "$last" ] && [ -n "$dom" ] || return 1
-  base=$(date -d "$(date -d "$last" '+%Y-%m-01') +1 month" '+%F' 2>/dev/null) || return 1
-  ny=${base%%-*}; nm=${base#*-}; nm=${nm%%-*}
-  dim=$(days_in_month "${ny}-${nm}"); [ -n "$dim" ] || return 1
-  [ "$dom" -gt "$dim" ] && dom=$dim
-  printf '%04d-%02d-%02d' "$ny" "$nm" "$dom"
+  y=${last%%-*}; m=${last#*-}; m=${m%%-*}; ym="${y}-${m}"
+  candidate=$(monthly_reset_date "$ym" "$dom") || return 1
+  if [ "$(date_to_epoch "$candidate")" -le "$(date_to_epoch "$last")" ]; then
+    next_ym=$(date -d "${ym}-01 +1 month" '+%Y-%m' 2>/dev/null) || return 1
+    candidate=$(monthly_reset_date "$next_ym" "$dom") || return 1
+  fi
+  printf '%s\n' "$candidate"
 }
 traffic_gb(){
   local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
@@ -1258,14 +1264,14 @@ report_menu(){
     menu_group "日报"
     menu_item "1/e" "启用 / 设置时间"
     menu_item "2/x" "关闭日报"
-    menu_item "3/t" "立即发送一次"
+    menu_item "3/t/r" "立即发送一次"
     menu_item "0/b" "返回"
     echo
     menu_prompt; read -r s || break
     case "$s" in
       1|e|E) report_install; pause ;;
       2|x|X) report_remove; pause ;;
-      3|t|T) do_report; pause ;;
+      3|t|T|r|R) do_report; pause ;;
       0|b|B|"") break ;;
     esac
   done
