@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.14"
+VER="1.4.15"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -312,18 +312,26 @@ metric_alerts(){
 # =============================================================
 render_one(){
   local name=$1 out=$2
-  local up load cpu mu mt mp du dt dp est svcs rxg txg
+  local up load cpu mu mt mp du dt dp est svcs rxg txg today_line f rxb txb rxn txn
   up=$(field UPTIME_S "$out"); load=$(field LOAD "$out"); cpu=$(field CPU "$out")
   mu=$(field MEM_USED_MB "$out"); mt=$(field MEM_TOTAL_MB "$out"); mp=$(field MEM_PCT "$out")
   du=$(field DISK_USED "$out"); dt=$(field DISK_TOTAL "$out"); dp=$(field DISK_PCT "$out")
   est=$(field TCP_EST "$out")
   svcs=$(printf '%s\n' "$out" | sed -n 's/^SVC=//p' | tr '\n' ' ')
+  f=$(st_file "$name")
+  rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
+  rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
   read -r rxg txg <<EOF
 $(net_total "$out")
 EOF
+  if [ -n "$rxn" ] && [ -n "$rxb" ] && [ -n "$txn" ] && [ -n "$txb" ]; then
+    today_line=$(traffic_gb "$rxn" "$rxb" "$txn" "$txb")
+  else
+    today_line="↓0.00G ↑0.00G"
+  fi
   [ -n "$up" ] && echo -e "  运行 ${CC}$(fmt_up "$up")${C0}  负载 ${CC}${load}${C0}  CPU ${cpu}核"
   [ -n "$mt" ] && echo -e "  内存 ${mu}/${mt} MB (${mp}%)   磁盘 ${du}/${dt} (${dp})"
-  echo -e "  总流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
+  echo -e "  今日实时 ${today_line}   总流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
   [ -n "$svcs" ] && echo -e "  服务 ${CG}${svcs}${C0}"
   return 0
 }
@@ -960,8 +968,18 @@ node_list(){
   while IFS='|' read -r name host port user key remark; do
     [ -z "$name" ] && continue
     [ -z "$remark" ] && remark="$name"
+    local f reset_dom reset_day next_reset reset_txt
+    f=$(st_file "$name")
+    reset_dom=$(kv_get "$f" RESET_DOM)
+    reset_day=$(kv_get "$f" RESET_DAY)
+    [ -z "$reset_dom" ] && [ -n "$reset_day" ] && reset_dom=$(date -d "$reset_day" '+%-d' 2>/dev/null)
+    reset_txt="  ${CGRY}重置日:${C0}-"
+    if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
+      next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
+      reset_txt="  ${CGRY}重置日:${C0}$(printf '%02d' "$reset_dom")号  ${CGRY}下次:${C0}${next_reset:-未知}"
+    fi
     i=$((i+1))
-    echo -e "  ${i}. ${CC}${remark}${C0} ${CGRY}[${name}]${C0}  ${host}:${port:-22}  ${user:-root}  ${CGRY}${key:-默认密钥}${C0}"
+    echo -e "  ${i}. ${CC}${remark}${C0} ${CGRY}[${name}]${C0}  ${host}:${port:-22}  ${user:-root}  ${CGRY}${key:-默认密钥}${C0}${reset_txt}"
   done < "$NODES"
 }
 
