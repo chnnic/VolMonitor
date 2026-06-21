@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.8"
+VER="1.4.9"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -158,6 +158,16 @@ state_record_node_meta(){
   kv_set "$f" NODE_KEY "$key"
 }
 
+state_reset_usage(){
+  local name=$1 cycle=$2 day=$3 cur_rx=$4 cur_tx=$5 f
+  f=$(st_file "$name")
+  [ -n "$cycle" ] && kv_set "$f" RESET_CYCLE "$cycle"
+  [ -n "$day" ] && kv_set "$f" RESET_DAY "$day"
+  [ -n "$day" ] && kv_set "$f" DAY "$day"
+  [ -n "$cur_rx" ] && kv_set "$f" RX_BASE "$cur_rx"
+  [ -n "$cur_tx" ] && kv_set "$f" TX_BASE "$cur_tx"
+}
+
 state_adopt_by_endpoint(){
   local name=$1 host=$2 port=$3 user=$4 key=$5 f cur_state cand stem
   cur_state=$(st_file "$name")
@@ -186,6 +196,7 @@ conf_quote(){
 }
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
+date_to_epoch(){ date -d "$1" +%s 2>/dev/null; }
 fmt_up(){ local s=$1; printf '%dd %02dh %02dm' $((s/86400)) $((s%86400/3600)) $((s%3600/60)); }
 net_total(){ printf '%s\n' "$1" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4}END{printf "%.2f %.2f",rx/1073741824,tx/1073741824}'; }
 
@@ -301,6 +312,7 @@ EOF
     [ "$(kv_get "$f" RX_BASE)" = "2147483647" ] && kv_set "$f" RX_BASE "$curx"
     [ "$(kv_get "$f" TX_BASE)" = "2147483647" ] && kv_set "$f" TX_BASE "$cutx"
     [ -z "$(kv_get "$f" RX_BASE)" ] && { kv_set "$f" RX_BASE "$curx"; kv_set "$f" TX_BASE "$cutx"; }
+    [ -z "$(kv_get "$f" RESET_DAY)" ] && kv_set "$f" RESET_DAY "$(date '+%F')"
     kv_set "$f" RX_NOW "$curx"; kv_set "$f" TX_NOW "$cutx"
     if [ "$prev" = "DOWN" ]; then
       tg_send "$(printf '✅ <b>%s</b> 已恢复在线\n主机: %s\n时间: %s' \
@@ -814,6 +826,26 @@ node_migrate_state(){
   echo -e "${CG}已迁移旧状态: $old -> $target${C0}"
 }
 
+node_reset_usage(){
+  load_conf
+  node_list
+  read -rp "要重置流量基准的节点名称: " n
+  [ -z "$n" ] && return
+  grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
+  local f cycle today cur_rx cur_tx next
+  f=$(st_file "$n")
+  read -rp "重置周期天数 [30]: " cycle
+  cycle=${cycle:-30}
+  case "$cycle" in ''|*[!0-9]*|0) echo -e "${CR}需正整数${C0}"; return ;; esac
+  today=$(date '+%F')
+  cur_rx=$(kv_get "$f" RX_NOW); cur_tx=$(kv_get "$f" TX_NOW)
+  state_reset_usage "$n" "$cycle" "$today" "$cur_rx" "$cur_tx"
+  next=$(date -d "$today +${cycle} day" '+%F' 2>/dev/null)
+  log "RESET_USAGE $n cycle=$cycle day=$today next=${next:-unknown}"
+  echo -e "${CG}已重置 [$n] 流量基准，重置日: $today，周期: ${cycle} 天${C0}"
+  [ -n "$next" ] && echo -e "${CGRY}下次重置: $next${C0}"
+}
+
 node_del(){
   load_conf
   node_list
@@ -1026,22 +1058,34 @@ do_report(){
   # 发送前实时刷新各节点(更新最新流量/状态,基线不变)
   [ -t 1 ] && echo -e "${CGRY}正在刷新各节点最新数据...${C0}"
   VERBOSE=0 do_run
-  local today; today=$(date '+%F')
+  local today now_epoch; today=$(date '+%F'); now_epoch=$(date '+%s')
   local nodes=0 up=0 down=0 trx=0 ttx=0 tdf=0 lines="" name host port user key remark
   while IFS='|' read -r name host port user key remark; do
     [ -z "$name" ] && continue
     case "$name" in \#*) continue ;; esac
     [ -z "$remark" ] && remark="$name"
     nodes=$((nodes+1))
-    local f st df rxb txb rxn txn drx dtx emoji gline
+    local f st df rxb txb rxn txn drx dtx emoji gline reset_day cycle reset_epoch next_epoch due_days due_txt
     f=$(st_file "$name")
     st=$(kv_get "$f" STATUS)
     df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
     rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
     rxn=$(kv_get "$f" RX_NOW);  txn=$(kv_get "$f" TX_NOW)
+    reset_day=$(kv_get "$f" RESET_DAY)
+    cycle=$(kv_get "$f" RESET_CYCLE)
     drx=0; dtx=0
     if [ -n "$rxn" ] && [ -n "$rxb" ]; then drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; fi
     if [ -n "$txn" ] && [ -n "$txb" ]; then dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; fi
+    due_txt=""
+    if [ -n "$reset_day" ] && [ -n "$cycle" ] && [ "$cycle" -gt 0 ] 2>/dev/null; then
+      reset_epoch=$(date_to_epoch "$reset_day")
+      [ -n "$reset_epoch" ] && next_epoch=$(date -d "$reset_day +${cycle} day" +%s 2>/dev/null)
+      if [ -n "$next_epoch" ]; then
+        due_days=$(( (next_epoch - now_epoch) / 86400 ))
+        [ "$due_days" -lt 0 ] && due_days=0
+        due_txt=" · 距重置 ${due_days}天"
+      fi
+    fi
     trx=$((trx+drx)); ttx=$((ttx+dtx)); tdf=$((tdf+df))
     case "$st" in
       DOWN) emoji="🔴"; down=$((down+1)) ;;
@@ -1050,7 +1094,7 @@ do_report(){
     esac
     gline=$(awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
     lines="$lines
-$emoji <b>$remark</b>  今日 $gline  失败 ${df}次"
+$emoji <b>$remark</b>  今日 $gline  失败 ${df}次${due_txt}"
   done < "$NODES"
   local tot; tot=$(awk -v r="$trx" -v t="$ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
   local msg
@@ -1212,7 +1256,8 @@ menu(){
           menu_item "2/e" "修改备注"
           menu_item "3/r" "重命名节点" "迁移日报基线/状态"
           menu_item "4/m" "迁移旧状态到当前节点" "修复手动改名后的基线"
-          menu_item "5/d" "删除节点"
+          menu_item "5/u" "重置流量基准" "作为月付续费倒计时起点"
+          menu_item "6/d" "删除节点"
           menu_item "0/b" "返回"
           echo
           menu_prompt; read -r s || break
@@ -1221,7 +1266,8 @@ menu(){
             2|e|E) node_set_remark; pause ;;
             3|r|R) node_rename; pause ;;
             4|m|M) node_migrate_state; pause ;;
-            5|d|D) node_del; pause ;;
+            5|u|U) node_reset_usage; pause ;;
+            6|d|D) node_del; pause ;;
             0|b|B|"") break ;;
           esac
         done ;;
