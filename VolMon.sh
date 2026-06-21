@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.12"
+VER="1.4.14"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -159,15 +159,17 @@ state_record_node_meta(){
 }
 
 state_reset_usage(){
-  local name=$1 cycle=$2 day=$3 cur_rx=$4 cur_tx=$5 f
+  local name=$1 dom=$2 day=$3 cur_rx=$4 cur_tx=$5 cycle_rx=$6 cycle_tx=$7 cycle_rx_used=$8 cycle_tx_used=$9 f
   f=$(st_file "$name")
-  [ -n "$cycle" ] && kv_set "$f" RESET_CYCLE "$cycle"
+  [ -n "$dom" ] && kv_set "$f" RESET_DOM "$dom"
   [ -n "$day" ] && kv_set "$f" RESET_DAY "$day"
   [ -n "$day" ] && kv_set "$f" DAY "$day"
   [ -n "$cur_rx" ] && kv_set "$f" RX_BASE "$cur_rx"
   [ -n "$cur_tx" ] && kv_set "$f" TX_BASE "$cur_tx"
-  [ -n "$cur_rx" ] && kv_set "$f" CYCLE_RX_BASE "$cur_rx"
-  [ -n "$cur_tx" ] && kv_set "$f" CYCLE_TX_BASE "$cur_tx"
+  [ -n "$cycle_rx" ] && kv_set "$f" CYCLE_RX_BASE "$cycle_rx"
+  [ -n "$cycle_tx" ] && kv_set "$f" CYCLE_TX_BASE "$cycle_tx"
+  [ -n "$cycle_rx_used" ] && kv_set "$f" CYCLE_RX_USED "$cycle_rx_used"
+  [ -n "$cycle_tx_used" ] && kv_set "$f" CYCLE_TX_USED "$cycle_tx_used"
 }
 
 state_adopt_by_endpoint(){
@@ -199,10 +201,51 @@ conf_quote(){
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
 date_to_epoch(){ date -d "$1" +%s 2>/dev/null; }
+valid_decimal(){ awk -v v="${1:-}" 'BEGIN{exit (v ~ /^([0-9]+([.][0-9]+)?|[.][0-9]+)$/) ? 0 : 1 }'; }
+gib_to_bytes(){ awk -v v="${1:-0}" 'BEGIN{if(v=="")v=0; printf "%.0f", v*1073741824}'; }
+days_in_month(){
+  local ym=$1
+  date -d "${ym}-01 +1 month -1 day" '+%d' 2>/dev/null | sed 's/^0*//'
+}
+monthly_cycle_start(){
+  local dom=$1 ref=${2:-$(date '+%F')} y m d dim this prev
+  d=${ref##*-}; d=$((10#$d))
+  y=${ref%%-*}; m=${ref#*-}; m=${m%%-*}
+  dim=$(days_in_month "${y}-${m}"); [ -n "$dim" ] || return 1
+  [ "$dom" -gt "$dim" ] && dom=$dim
+  this=$(printf '%04d-%02d-%02d' "$y" "$m" "$dom")
+  if [ "$d" -lt "$dom" ]; then
+    prev=$(date -d "$this -1 month" '+%F' 2>/dev/null) || return 1
+    y=${prev%%-*}; m=${prev#*-}; m=${m%%-*}
+    dim=$(days_in_month "${y}-${m}"); [ -n "$dim" ] || return 1
+    [ "$dom" -gt "$dim" ] && dom=$dim
+    printf '%04d-%02d-%02d' "$y" "$m" "$dom"
+  else
+    printf '%s\n' "$this"
+  fi
+}
+monthly_next_reset(){
+  local last=$1 dom=$2 base ny nm dim
+  [ -n "$last" ] && [ -n "$dom" ] || return 1
+  base=$(date -d "$(date -d "$last" '+%Y-%m-01') +1 month" '+%F' 2>/dev/null) || return 1
+  ny=${base%%-*}; nm=${base#*-}; nm=${nm%%-*}
+  dim=$(days_in_month "${ny}-${nm}"); [ -n "$dim" ] || return 1
+  [ "$dom" -gt "$dim" ] && dom=$dim
+  printf '%04d-%02d-%02d' "$ny" "$nm" "$dom"
+}
 traffic_gb(){
   local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
   [ -n "$rxn" ] && [ -n "$rxb" ] && { drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; }
   [ -n "$txn" ] && [ -n "$txb" ] && { dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; }
+  awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}'
+}
+cycle_usage_gb(){
+  local rxn=$1 rxb=$2 rxu=${3:-0} txn=$4 txb=$5 txu=${6:-0} drx=0 dtx=0
+  [ -n "$rxn" ] && [ -n "$rxb" ] && drx=$((rxn-rxb))
+  [ -n "$txn" ] && [ -n "$txb" ] && dtx=$((txn-txb))
+  drx=$((drx + rxu)); dtx=$((dtx + txu))
+  [ "$drx" -lt 0 ] && drx=0
+  [ "$dtx" -lt 0 ] && dtx=0
   awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}'
 }
 fmt_up(){ local s=$1; printf '%dd %02dh %02dm' $((s/86400)) $((s%86400/3600)) $((s%3600/60)); }
@@ -371,7 +414,7 @@ do_run(){ VERBOSE="${VERBOSE:-0}"; load_conf; foreach_node process_node; }
 show_one_status(){
   local name=$1 host=$2 port=$3 user=$4 key=$5 remark=$6
   [ -z "$remark" ] && remark="$name"
-  local f status fails last check snap cycle_rx cycle_tx rxn txn cycle_line
+  local f status fails last check snap cycle_rx cycle_tx rxn txn cycle_rx_used cycle_tx_used cycle_line
   state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
   status=$(kv_get "$f" STATUS); fails=$(kv_get "$f" FAILS)
@@ -394,9 +437,23 @@ show_one_status(){
   rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
   cycle_rx=$(kv_get "$f" CYCLE_RX_BASE); [ -z "$cycle_rx" ] && cycle_rx=$(kv_get "$f" RX_BASE)
   cycle_tx=$(kv_get "$f" CYCLE_TX_BASE); [ -z "$cycle_tx" ] && cycle_tx=$(kv_get "$f" TX_BASE)
+  cycle_rx_used=$(kv_get "$f" CYCLE_RX_USED); [ -z "$cycle_rx_used" ] && cycle_rx_used=0
+  cycle_tx_used=$(kv_get "$f" CYCLE_TX_USED); [ -z "$cycle_tx_used" ] && cycle_tx_used=0
+  local reset_dom reset_day next_reset due_days
+  reset_dom=$(kv_get "$f" RESET_DOM)
+  reset_day=$(kv_get "$f" RESET_DAY)
+  [ -z "$reset_dom" ] && [ -n "$reset_day" ] && reset_dom=$(date -d "$reset_day" '+%-d' 2>/dev/null)
   if [ -n "$rxn" ] && [ -n "$txn" ]; then
-    cycle_line=$(traffic_gb "$rxn" "$cycle_rx" "$txn" "$cycle_tx")
-    echo -e "   ${CGRY}计费周期:${C0} ${cycle_line}"
+    cycle_line=$(cycle_usage_gb "$rxn" "$cycle_rx" "$cycle_rx_used" "$txn" "$cycle_tx" "$cycle_tx_used")
+    if [ -n "$reset_dom" ] && [ -n "$reset_day" ] && [ -n "$next_reset" ]; then :; fi
+    if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
+      next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
+      [ -n "$next_reset" ] && due_days=$(( ( $(date_to_epoch "$next_reset") - $(date '+%s') ) / 86400 )) || due_days=""
+      [ -n "$due_days" ] && [ "$due_days" -lt 0 ] && due_days=0
+      [ -n "$due_days" ] && echo -e "   ${CGRY}重置周期内已用:${C0} ${cycle_line}   ${CGRY}距重置:${C0} ${due_days}天"
+    else
+      echo -e "   ${CGRY}重置周期内已用:${C0} ${cycle_line}"
+    fi
   fi
   snap=$(snap_file "$name")
   if [ "$status" = "UP" ] || { [ -f "$snap" ] && [ "$status" != "DOWN" ]; }; then
@@ -847,19 +904,37 @@ node_reset_usage(){
   read -rp "要重置流量基准的节点名称: " n
   [ -z "$n" ] && return
   grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
-  local f cycle day cur_rx cur_tx next
+  local f dom day cur_rx cur_tx cycle_rx_used cycle_tx_used next reset_day
   f=$(st_file "$n")
-  read -rp "重置起算日 [YYYY-MM-DD, 默认今天]: " day
-  read -rp "重置周期天数 [30]: " cycle
-  cycle=${cycle:-30}
-  case "$cycle" in ''|*[!0-9]*|0) echo -e "${CR}需正整数${C0}"; return ;; esac
-  [ -z "$day" ] && day=$(date '+%F')
-  date_to_epoch "$day" >/dev/null || { echo -e "${CR}日期格式应为 YYYY-MM-DD${C0}"; return; }
+  local dom_default
+  local existing_reset_day
+  dom_default=$(kv_get "$f" RESET_DOM)
+  existing_reset_day=$(kv_get "$f" RESET_DAY)
+  if [ -z "$dom_default" ] && [ -n "$existing_reset_day" ]; then
+    dom_default=$(date -d "$existing_reset_day" '+%-d' 2>/dev/null)
+  fi
+  [ -z "$dom_default" ] && dom_default=$(date '+%-d')
+  read -rp "每月重置日 [1-31, 默认 ${dom_default}]: " dom
+  dom=${dom:-$dom_default}
+  case "$dom" in ''|*[!0-9]*|0) echo -e "${CR}重置日需为 1-31${C0}"; return ;; esac
+  [ "$dom" -gt 31 ] && { echo -e "${CR}重置日需为 1-31${C0}"; return; }
   cur_rx=$(kv_get "$f" RX_NOW); cur_tx=$(kv_get "$f" TX_NOW)
-  state_reset_usage "$n" "$cycle" "$day" "$cur_rx" "$cur_tx"
-  next=$(date -d "$day +${cycle} day" '+%F' 2>/dev/null)
-  log "RESET_USAGE $n cycle=$cycle day=$day next=${next:-unknown}"
-  echo -e "${CG}已重置 [$n] 流量基准，重置日: $day，周期: ${cycle} 天${C0}"
+  read -rp "重置起算日已用下行流量 [GiB, 默认 0]: " cycle_rx_used
+  read -rp "重置起算日已用上行流量 [GiB, 默认 0]: " cycle_tx_used
+  [ -z "$cycle_rx_used" ] && cycle_rx_used=0
+  [ -z "$cycle_tx_used" ] && cycle_tx_used=0
+  valid_decimal "$cycle_rx_used" || { echo -e "${CR}下行流量需为数字${C0}"; return; }
+  valid_decimal "$cycle_tx_used" || { echo -e "${CR}上行流量需为数字${C0}"; return; }
+  cycle_rx_used=$(gib_to_bytes "$cycle_rx_used")
+  cycle_tx_used=$(gib_to_bytes "$cycle_tx_used")
+  reset_day=$(monthly_cycle_start "$dom")
+  [ -z "$reset_day" ] && { echo -e "${CR}无法计算当前周期起算日${C0}"; return; }
+  state_reset_usage "$n" "$dom" "$reset_day" "$cur_rx" "$cur_tx" "" "" "$cycle_rx_used" "$cycle_tx_used"
+  next=$(monthly_next_reset "$reset_day" "$dom")
+  log "RESET_USAGE $n dom=$dom day=$reset_day next=${next:-unknown}"
+  echo -e "${CG}已重置 [$n] 流量基准，每月重置日: $(printf '%02d' "$dom") 号${C0}"
+  echo -e "${CGRY}当前周期起算日: $reset_day${C0}"
+  echo -e "${CGRY}起算时已用: ↓$(awk -v v="$cycle_rx_used" 'BEGIN{printf "%.2fG",v/1073741824}') ↑$(awk -v v="$cycle_tx_used" 'BEGIN{printf "%.2fG",v/1073741824}')${C0}"
   [ -n "$next" ] && echo -e "${CGRY}下次重置: $next${C0}"
 }
 
@@ -1054,9 +1129,13 @@ do_daemon(){
     local up=0 down=0 other=0 name rest st
     while IFS='|' read -r name rest; do
       [ -z "$name" ] && continue
-      case "$name" in \#*) continue ;; esac
+      [ "${name#\#}" = "$name" ] || continue
       st=$(kv_get "$(st_file "$name")" STATUS)
-      case "$st" in UP) up=$((up+1)) ;; DOWN) down=$((down+1)) ;; *) other=$((other+1)) ;; esac
+    case "$st" in
+      UP) up=$((up+1)) ;;
+      DOWN) down=$((down+1)) ;;
+      *) other=$((other+1)) ;;
+    esac
     done < "$NODES"
     local nxt; nxt=$(date '+%H:%M:%S' -d "+${iv} sec" 2>/dev/null)
     echo
@@ -1076,29 +1155,33 @@ do_report(){
   [ -t 1 ] && echo -e "${CGRY}正在刷新各节点最新数据...${C0}"
   VERBOSE=0 do_run
   local today now_epoch; today=$(date '+%F'); now_epoch=$(date '+%s')
-  local nodes=0 up=0 down=0 trx=0 ttx=0 tdf=0 lines="" name host port user key remark
+  local nodes=0 up=0 down=0 trx=0 ttx=0 cycle_trx=0 cycle_ttx=0 tdf=0 lines="" name host port user key remark
   while IFS='|' read -r name host port user key remark; do
     [ -z "$name" ] && continue
-    case "$name" in \#*) continue ;; esac
+    [ "${name#\#}" = "$name" ] || continue
     [ -z "$remark" ] && remark="$name"
     nodes=$((nodes+1))
-    local f st df rxb txb rxn txn drx dtx emoji gline reset_day cycle reset_epoch next_epoch due_days due_txt
+    local f st df rxb txb rxn txn drx dtx rxu txu emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt
     f=$(st_file "$name")
     st=$(kv_get "$f" STATUS)
     df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
     rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
     rxn=$(kv_get "$f" RX_NOW);  txn=$(kv_get "$f" TX_NOW)
+    rxu=$(kv_get "$f" CYCLE_RX_USED); [ -z "$rxu" ] && rxu=0
+    txu=$(kv_get "$f" CYCLE_TX_USED); [ -z "$txu" ] && txu=0
+    reset_dom=$(kv_get "$f" RESET_DOM)
     reset_day=$(kv_get "$f" RESET_DAY)
-    cycle=$(kv_get "$f" RESET_CYCLE)
+    [ -z "$reset_dom" ] && [ -n "$reset_day" ] && reset_dom=$(date -d "$reset_day" '+%-d' 2>/dev/null)
     drx=0; dtx=0
     if [ -n "$rxn" ] && [ -n "$rxb" ]; then drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; fi
     if [ -n "$txn" ] && [ -n "$txb" ]; then dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; fi
+    cycle_trx=$((cycle_trx + drx + rxu))
+    cycle_ttx=$((cycle_ttx + dtx + txu))
     due_txt=""
-    if [ -n "$reset_day" ] && [ -n "$cycle" ] && [ "$cycle" -gt 0 ] 2>/dev/null; then
-      reset_epoch=$(date_to_epoch "$reset_day")
-      [ -n "$reset_epoch" ] && next_epoch=$(date -d "$reset_day +${cycle} day" +%s 2>/dev/null)
-      if [ -n "$next_epoch" ]; then
-        due_days=$(( (next_epoch - now_epoch) / 86400 ))
+    if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
+      next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
+      if [ -n "$next_reset" ]; then
+        due_days=$(( ( $(date_to_epoch "$next_reset") - now_epoch ) / 86400 ))
         [ "$due_days" -lt 0 ] && due_days=0
         due_txt=" · 距重置 ${due_days}天"
       fi
@@ -1110,13 +1193,15 @@ do_report(){
       *)    emoji="⚪" ;;
     esac
     gline=$(awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+    cycle_line=$(awk -v r="$rxu" -v t="$txu" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
     lines="$lines
-$emoji <b>$remark</b>  今日 $gline  失败 ${df}次${due_txt}"
+$emoji <b>$remark</b>  今日 $gline  周期已用 $cycle_line  失败 ${df}次${due_txt}"
   done < "$NODES"
   local tot; tot=$(awk -v r="$trx" -v t="$ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+  local cycle_tot; cycle_tot=$(awk -v r="$cycle_trx" -v t="$cycle_ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
   local msg
-  msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d\n合计今日流量 %s · 失败 %d次\n————————————%s' \
-    "$today" "$nodes" "$up" "$down" "$tot" "$tdf" "$lines")
+  msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d\n合计今日流量 %s · 重置周期内已用 %s · 失败 %d次\n————————————%s' \
+    "$today" "$nodes" "$up" "$down" "$tot" "$cycle_tot" "$tdf" "$lines")
   [ -t 1 ] && printf '%s\n' "$msg" | sed 's/<[^>]*>//g'
   if tg_send "$msg"; then log "REPORT sent"; [ -t 1 ] && echo -e "${CG}日报已推送${C0}"
   else log "REPORT send failed"; [ -t 1 ] && echo -e "${CR}推送失败(检查 TG 配置/网络)${C0}"; fi
