@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.17"
+VER="1.4.18"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -201,6 +201,14 @@ conf_quote(){
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
 date_to_epoch(){ date -d "$1" +%s 2>/dev/null; }
+date_days_until(){
+  local target=$1 today=${2:-$(date '+%F')} target_epoch today_epoch days
+  target_epoch=$(date_to_epoch "$target") || return 1
+  today_epoch=$(date_to_epoch "$today") || return 1
+  days=$(( (target_epoch - today_epoch) / 86400 ))
+  [ "$days" -lt 0 ] && days=0
+  printf '%s\n' "$days"
+}
 valid_decimal(){ awk -v v="${1:-}" 'BEGIN{exit (v ~ /^([0-9]+([.][0-9]+)?|[.][0-9]+)$/) ? 0 : 1 }'; }
 gib_to_bytes(){ awk -v v="${1:-0}" 'BEGIN{if(v=="")v=0; printf "%.0f", v*1073741824}'; }
 days_in_month(){
@@ -462,8 +470,7 @@ show_one_status(){
     if [ -n "$reset_dom" ] && [ -n "$reset_day" ] && [ -n "$next_reset" ]; then :; fi
     if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
       next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
-      [ -n "$next_reset" ] && due_days=$(( ( $(date_to_epoch "$next_reset") - $(date '+%s') ) / 86400 )) || due_days=""
-      [ -n "$due_days" ] && [ "$due_days" -lt 0 ] && due_days=0
+      [ -n "$next_reset" ] && due_days=$(date_days_until "$next_reset") || due_days=""
       [ -n "$due_days" ] && echo -e "   ${CGRY}重置周期内已用:${C0} ${cycle_line}   ${CGRY}距重置:${C0} ${due_days}天"
     else
       echo -e "   ${CGRY}重置周期内已用:${C0} ${cycle_line}"
@@ -1178,7 +1185,7 @@ do_report(){
   # 发送前实时刷新各节点(更新最新流量/状态,基线不变)
   [ -t 1 ] && echo -e "${CGRY}正在刷新各节点最新数据...${C0}"
   VERBOSE=0 do_run
-  local today now_epoch; today=$(date '+%F'); now_epoch=$(date '+%s')
+  local today; today=$(date '+%F')
   local nodes=0 up=0 down=0 trx=0 ttx=0 cycle_trx=0 cycle_ttx=0 tdf=0 lines="" name host port user key remark
   while IFS='|' read -r name host port user key remark; do
     [ -z "$name" ] && continue
@@ -1207,8 +1214,7 @@ do_report(){
     if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
       next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
       if [ -n "$next_reset" ]; then
-        due_days=$(( ( $(date_to_epoch "$next_reset") - now_epoch ) / 86400 ))
-        [ "$due_days" -lt 0 ] && due_days=0
+        due_days=$(date_days_until "$next_reset" "$today")
         due_txt=" · 距重置 ${due_days}天"
       fi
     fi
