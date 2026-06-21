@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.11"
+VER="1.4.12"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -847,17 +847,19 @@ node_reset_usage(){
   read -rp "要重置流量基准的节点名称: " n
   [ -z "$n" ] && return
   grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
-  local f cycle today cur_rx cur_tx next
+  local f cycle day cur_rx cur_tx next
   f=$(st_file "$n")
+  read -rp "重置起算日 [YYYY-MM-DD, 默认今天]: " day
   read -rp "重置周期天数 [30]: " cycle
   cycle=${cycle:-30}
   case "$cycle" in ''|*[!0-9]*|0) echo -e "${CR}需正整数${C0}"; return ;; esac
-  today=$(date '+%F')
+  [ -z "$day" ] && day=$(date '+%F')
+  date_to_epoch "$day" >/dev/null || { echo -e "${CR}日期格式应为 YYYY-MM-DD${C0}"; return; }
   cur_rx=$(kv_get "$f" RX_NOW); cur_tx=$(kv_get "$f" TX_NOW)
-  state_reset_usage "$n" "$cycle" "$today" "$cur_rx" "$cur_tx"
-  next=$(date -d "$today +${cycle} day" '+%F' 2>/dev/null)
-  log "RESET_USAGE $n cycle=$cycle day=$today next=${next:-unknown}"
-  echo -e "${CG}已重置 [$n] 流量基准，重置日: $today，周期: ${cycle} 天${C0}"
+  state_reset_usage "$n" "$cycle" "$day" "$cur_rx" "$cur_tx"
+  next=$(date -d "$day +${cycle} day" '+%F' 2>/dev/null)
+  log "RESET_USAGE $n cycle=$cycle day=$day next=${next:-unknown}"
+  echo -e "${CG}已重置 [$n] 流量基准，重置日: $day，周期: ${cycle} 天${C0}"
   [ -n "$next" ] && echo -e "${CGRY}下次重置: $next${C0}"
 }
 

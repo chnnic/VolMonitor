@@ -17,7 +17,7 @@
 | `VolMon.sh` | 主控机 | 节点管理、定时拉取、状态总览、Telegram 告警、密钥管理(单文件含全部功能) |
 | `volmon-node.sh` | 被控机 | 轻量助手:安装 / 生成「受限监控公钥」、本机看状态(纯 POSIX sh,适合 OpenWrt) |
 
-当前版本:`VolMon.sh` v1.4.11;`volmon-node.sh` v1.1.0。
+当前版本:`VolMon.sh` v1.4.12;`volmon-node.sh` v1.1.0。
 
 被控机**默认无需任何脚本**;`volmon-node.sh` 仅在你想加固登录方式(受限公钥)时使用。
 
@@ -317,7 +317,7 @@ nat-home|nat.example.xyz|2222|root|/root/.vol-monitor/keys/hk.key|香港家宽
 - `e` 启用 / 设置时间(默认 `23:59`),写入一条独立 cron(标记 `# volmon-report`,与拉取 cron 互不影响)
 - `x` 关闭
 - `t` 立即发送一次
-- 节点管理里可执行 `u` 重置流量基准,用于把当天累计流量重新作为新起点;日报会显示 `距重置 X天`。
+- 节点管理里可执行 `u` 重置流量基准,可手动填写重置起算日与周期天数;日报会显示 `距重置 X天`。
 
 推送样例:
 
@@ -375,6 +375,7 @@ VOLMON_REPO="https://raw.githubusercontent.com/chnnic/VolMonitor/main" ./VolMon.
 
 ### 版本记录
 
+- `VolMon.sh` v1.4.12:重置流量基准时可手动指定起算日,方便对齐月初 / 续费日。
 - `VolMon.sh` v1.4.11:状态总览新增「计费周期内流量」一行,下方继续显示总流量。
 - `VolMon.sh` v1.4.9:新增流量基准重置与续费倒计时显示;日报可展示距离重置日还有多少天,节点菜单可手动重置基准。
 - `VolMon.sh` v1.4.8:修复部分 Linux `awk` 使用 `%d` 汇总累计流量时被截断为 `2147483647`，导致大流量节点日报始终显示 `0.00G` 的问题；首次正确采集时自动重置已截顶的旧基准线。
