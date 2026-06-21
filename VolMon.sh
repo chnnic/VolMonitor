@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.16"
+VER="1.4.17"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -1185,7 +1185,7 @@ do_report(){
     [ "${name#\#}" = "$name" ] || continue
     [ -z "$remark" ] && remark="$name"
     nodes=$((nodes+1))
-    local f st df rxb txb rxn txn drx dtx rxu txu emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt
+    local f st df rxb txb rxn txn drx dtx rxu txu cdrx cdtx emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt
     f=$(st_file "$name")
     st=$(kv_get "$f" STATUS)
     df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
@@ -1199,8 +1199,10 @@ do_report(){
     drx=0; dtx=0
     if [ -n "$rxn" ] && [ -n "$rxb" ]; then drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; fi
     if [ -n "$txn" ] && [ -n "$txb" ]; then dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; fi
-    cycle_trx=$((cycle_trx + drx + rxu))
-    cycle_ttx=$((cycle_ttx + dtx + txu))
+    cdrx=$((drx + rxu)); [ "$cdrx" -lt 0 ] && cdrx=0
+    cdtx=$((dtx + txu)); [ "$cdtx" -lt 0 ] && cdtx=0
+    cycle_trx=$((cycle_trx + cdrx))
+    cycle_ttx=$((cycle_ttx + cdtx))
     due_txt=""
     if [ -n "$reset_dom" ] && [ -n "$reset_day" ]; then
       next_reset=$(monthly_next_reset "$reset_day" "$reset_dom")
@@ -1217,15 +1219,19 @@ do_report(){
       *)    emoji="⚪" ;;
     esac
     gline=$(awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
-    cycle_line=$(awk -v r="$rxu" -v t="$txu" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+    cycle_line=$(awk -v r="$cdrx" -v t="$cdtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
     lines="$lines
-$emoji <b>$remark</b>  今日 $gline  周期已用 $cycle_line  失败 ${df}次${due_txt}"
+$emoji <b>$remark</b>
+  今日  $gline
+  周期  $cycle_line
+  状态  失败 ${df}次${due_txt}
+"
   done < "$NODES"
   local tot; tot=$(awk -v r="$trx" -v t="$ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
   local cycle_tot; cycle_tot=$(awk -v r="$cycle_trx" -v t="$cycle_ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
   local msg
-  msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d\n合计今日流量 %s · 重置周期内已用 %s · 失败 %d次\n————————————%s' \
-    "$today" "$nodes" "$up" "$down" "$tot" "$cycle_tot" "$tdf" "$lines")
+  msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d · 失败 %d次\n\n今日合计\n  %s\n重置周期合计\n  %s\n————————————%s' \
+    "$today" "$nodes" "$up" "$down" "$tdf" "$tot" "$cycle_tot" "$lines")
   [ -t 1 ] && printf '%s\n' "$msg" | sed 's/<[^>]*>//g'
   if tg_send "$msg"; then log "REPORT sent"; [ -t 1 ] && echo -e "${CG}日报已推送${C0}"
   else log "REPORT send failed"; [ -t 1 ] && echo -e "${CR}推送失败(检查 TG 配置/网络)${C0}"; fi
