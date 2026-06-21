@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.9"
+VER="1.4.11"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -166,6 +166,8 @@ state_reset_usage(){
   [ -n "$day" ] && kv_set "$f" DAY "$day"
   [ -n "$cur_rx" ] && kv_set "$f" RX_BASE "$cur_rx"
   [ -n "$cur_tx" ] && kv_set "$f" TX_BASE "$cur_tx"
+  [ -n "$cur_rx" ] && kv_set "$f" CYCLE_RX_BASE "$cur_rx"
+  [ -n "$cur_tx" ] && kv_set "$f" CYCLE_TX_BASE "$cur_tx"
 }
 
 state_adopt_by_endpoint(){
@@ -197,6 +199,12 @@ conf_quote(){
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
 date_to_epoch(){ date -d "$1" +%s 2>/dev/null; }
+traffic_gb(){
+  local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
+  [ -n "$rxn" ] && [ -n "$rxb" ] && { drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; }
+  [ -n "$txn" ] && [ -n "$txb" ] && { dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; }
+  awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}'
+}
 fmt_up(){ local s=$1; printf '%dd %02dh %02dm' $((s/86400)) $((s%86400/3600)) $((s%3600/60)); }
 net_total(){ printf '%s\n' "$1" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4}END{printf "%.2f %.2f",rx/1073741824,tx/1073741824}'; }
 
@@ -272,7 +280,7 @@ $(net_total "$out")
 EOF
   [ -n "$up" ] && echo -e "  运行 ${CC}$(fmt_up "$up")${C0}  负载 ${CC}${load}${C0}  CPU ${cpu}核"
   [ -n "$mt" ] && echo -e "  内存 ${mu}/${mt} MB (${mp}%)   磁盘 ${du}/${dt} (${dp})"
-  echo -e "  流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
+  echo -e "  总流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
   [ -n "$svcs" ] && echo -e "  服务 ${CG}${svcs}${C0}"
   return 0
 }
@@ -363,7 +371,7 @@ do_run(){ VERBOSE="${VERBOSE:-0}"; load_conf; foreach_node process_node; }
 show_one_status(){
   local name=$1 host=$2 port=$3 user=$4 key=$5 remark=$6
   [ -z "$remark" ] && remark="$name"
-  local f status fails last check snap
+  local f status fails last check snap cycle_rx cycle_tx rxn txn cycle_line
   state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
   status=$(kv_get "$f" STATUS); fails=$(kv_get "$f" FAILS)
@@ -383,6 +391,13 @@ show_one_status(){
   esac
   echo -e "${color}${dot}${C0} ${CB}${remark}${C0} ${CGRY}[${name}] (${host}:${port:-22})${C0}  状态:${color}${status}${C0}"
   echo -e "   ${CGRY}最后检测:${check:-无}  |  最后在线:${last:-无}  |  连续失败:${fails:-0}${C0}"
+  rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
+  cycle_rx=$(kv_get "$f" CYCLE_RX_BASE); [ -z "$cycle_rx" ] && cycle_rx=$(kv_get "$f" RX_BASE)
+  cycle_tx=$(kv_get "$f" CYCLE_TX_BASE); [ -z "$cycle_tx" ] && cycle_tx=$(kv_get "$f" TX_BASE)
+  if [ -n "$rxn" ] && [ -n "$txn" ]; then
+    cycle_line=$(traffic_gb "$rxn" "$cycle_rx" "$txn" "$cycle_tx")
+    echo -e "   ${CGRY}计费周期:${C0} ${cycle_line}"
+  fi
   snap=$(snap_file "$name")
   if [ "$status" = "UP" ] || { [ -f "$snap" ] && [ "$status" != "DOWN" ]; }; then
     [ -f "$snap" ] && render_one "$name" "$(cat "$snap")"
