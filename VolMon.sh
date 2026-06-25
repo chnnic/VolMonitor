@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.20"
+VER="1.4.21"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -115,6 +115,9 @@ log(){ echo "$(date '+%F %T') $*" >> "$LOG"; }
 safe(){ printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'; }
 st_file(){ echo "$STATE_DIR/$(safe "$1").state"; }
 snap_file(){ echo "$SNAP_DIR/$(safe "$1").snap"; }
+valid_node_name(){ case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; *) return 0 ;; esac; }
+node_exists(){ awk -F'|' -v n="$1" '$1==n{found=1; exit} END{exit !found}' "$NODES" 2>/dev/null; }
+node_line(){ awk -F'|' -v n="$1" '$1==n{print; exit}' "$NODES" 2>/dev/null; }
 
 state_migrate_name(){
   local old=$1 new=$2 old_state new_state old_snap new_snap
@@ -163,7 +166,7 @@ state_reset_usage(){
   f=$(st_file "$name")
   [ -n "$dom" ] && kv_set "$f" RESET_DOM "$dom"
   [ -n "$day" ] && kv_set "$f" RESET_DAY "$day"
-  [ -n "$day" ] && kv_set "$f" DAY "$day"
+  [ -n "$day" ] && kv_set "$f" DAY "$(date '+%F')"
   [ -n "$cur_rx" ] && kv_set "$f" RX_BASE "$cur_rx"
   [ -n "$cur_tx" ] && kv_set "$f" TX_BASE "$cur_tx"
   [ -n "$cycle_rx" ] && kv_set "$f" CYCLE_RX_BASE "$cycle_rx"
@@ -197,6 +200,9 @@ state_adopt_by_endpoint(){
 
 conf_quote(){
   awk -v s="$1" 'BEGIN{gsub(/\047/, "\047\\\047\047", s); printf "\047%s\047", s}'
+}
+html_escape(){
+  awk -v s="$1" 'BEGIN{gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); printf "%s", s}'
 }
 
 field(){ printf '%s\n' "$2" | sed -n "s/^$1=//p" | head -1; }
@@ -274,16 +280,21 @@ traffic_bytes_gb(){
   local r=${1:-0} t=${2:-0}
   awk -v r="$r" -v t="$t" 'BEGIN{printf "↓%.2fG · ↑%.2fG · ↓↑%.2fG",r/1073741824,t/1073741824,(r+t)/1073741824}'
 }
+traffic_delta(){
+  local now=$1 base=$2 delta=0
+  [ -n "$now" ] && [ -n "$base" ] && { delta=$((now-base)); [ "$delta" -lt 0 ] && delta=$now; }
+  printf '%s\n' "$delta"
+}
 traffic_gb(){
   local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
-  [ -n "$rxn" ] && [ -n "$rxb" ] && { drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; }
-  [ -n "$txn" ] && [ -n "$txb" ] && { dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; }
+  drx=$(traffic_delta "$rxn" "$rxb")
+  dtx=$(traffic_delta "$txn" "$txb")
   traffic_bytes_gb "$drx" "$dtx"
 }
 cycle_usage_gb(){
   local rxn=$1 rxb=$2 rxu=${3:-0} txn=$4 txb=$5 txu=${6:-0} drx=0 dtx=0
-  [ -n "$rxn" ] && [ -n "$rxb" ] && drx=$((rxn-rxb))
-  [ -n "$txn" ] && [ -n "$txb" ] && dtx=$((txn-txb))
+  drx=$(traffic_delta "$rxn" "$rxb")
+  dtx=$(traffic_delta "$txn" "$txb")
   drx=$((drx + rxu)); dtx=$((dtx + txu))
   [ "$drx" -lt 0 ] && drx=0
   [ "$dtx" -lt 0 ] && dtx=0
@@ -338,8 +349,9 @@ metric_alerts(){
   local flag; flag=$(kv_get "$f" DISK_ALERTED); [ -z "$flag" ] && flag=0
   if [ "$dp" -ge "${DISK_WARN:-90}" ] 2>/dev/null; then
     if [ "$flag" != "1" ]; then
+      local safe_name; safe_name=$(html_escape "$name")
       tg_send "$(printf '⚠️ <b>%s</b> 磁盘使用率 %s%%\n阈值: %s%%\n时间: %s' \
-        "$name" "$dp" "${DISK_WARN:-90}" "$(date '+%F %T %Z')")"
+        "$safe_name" "$dp" "${DISK_WARN:-90}" "$(date '+%F %T %Z')")"
       kv_set "$f" DISK_ALERTED 1
     fi
   else
@@ -384,7 +396,9 @@ process_node(){
   local name=$1 host=$2 port=$3 user=$4 key=$5 remark=$6
   [ -z "$remark" ] && remark="$name"
   local label="$remark"; [ "$remark" != "$name" ] && label="$remark ($name)"
-  local f out rc prev fails
+  local f out rc prev fails label_html host_html
+  label_html=$(html_escape "$label")
+  host_html=$(html_escape "$host:${port:-22}")
   state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
   state_record_node_meta "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
@@ -417,7 +431,7 @@ EOF
     state_sync_reset_cycle "$f"
     if [ "$prev" = "DOWN" ]; then
       tg_send "$(printf '✅ <b>%s</b> 已恢复在线\n主机: %s\n时间: %s' \
-        "$label" "$host:${port:-22}" "$(date '+%F %T %Z')")"
+        "$label_html" "$host_html" "$(date '+%F %T %Z')")"
       log "RECOVER $name"
       [ "$VERBOSE" = "1" ] && echo -e "  ${CG}↑ 已恢复,发送恢复通知${C0}"
     fi
@@ -434,13 +448,46 @@ EOF
       kv_set "$f" STATUS DOWN
       local last; last=$(kv_get "$f" LASTSEEN); [ -z "$last" ] && last="未知"
       tg_send "$(printf '🔴 <b>%s</b> 离线告警\n连续失败: %s 次\n最后在线: %s\n主机: %s\n时间: %s' \
-        "$label" "$fails" "$last" "$host:${port:-22}" "$(date '+%F %T %Z')")"
+        "$label_html" "$fails" "$last" "$host_html" "$(date '+%F %T %Z')")"
       log "ALERT DOWN $name"
       [ "$VERBOSE" = "1" ] && echo -e "${CB}● ${CR}$remark${C0} ${CGRY}[$name] ($host)${C0}  ${CR}离线,已发送告警${C0}"
     else
       [ "$VERBOSE" = "1" ] && echo -e "${CB}● ${CY}$remark${C0} ${CGRY}[$name] ($host)${C0}  拉取失败 (#$fails)"
     fi
   fi
+}
+
+refresh_node_snapshot(){
+  local name=$1 host=$2 port=$3 user=$4 key=$5
+  local f out rc curx cutx today
+  state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
+  state_record_node_meta "$name" "$host" "$port" "$user" "$key"
+  f=$(st_file "$name")
+  out=$(do_ssh "$host" "$port" "$user" "$key"); rc=$?
+  kv_set "$f" LASTCHECK "$(date '+%F %T')"
+  [ "$rc" = "0" ] && printf '%s' "$out" | grep -q '^HOST=' || return 1
+  kv_set "$f" FAILS 0
+  kv_set "$f" STATUS UP
+  kv_set "$f" LASTSEEN "$(date '+%F %T')"
+  printf '%s\n' "$out" > "$(snap_file "$name")"
+  read -r curx cutx <<EOF
+$(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4} END{printf "%.0f %.0f",rx,tx}')
+EOF
+  [ -n "$curx" ] && [ -n "$cutx" ] || return 1
+  today=$(date '+%F')
+  if [ "$(kv_get "$f" DAY)" != "$today" ]; then
+    kv_set "$f" DAY "$today"
+    kv_set "$f" DFAILS 0
+    kv_set "$f" RX_BASE ""
+    kv_set "$f" TX_BASE ""
+  fi
+  [ "$(kv_get "$f" RX_BASE)" = "2147483647" ] && kv_set "$f" RX_BASE "$curx"
+  [ "$(kv_get "$f" TX_BASE)" = "2147483647" ] && kv_set "$f" TX_BASE "$cutx"
+  [ -z "$(kv_get "$f" RX_BASE)" ] && { kv_set "$f" RX_BASE "$curx"; kv_set "$f" TX_BASE "$cutx"; }
+  [ -z "$(kv_get "$f" RESET_DAY)" ] && kv_set "$f" RESET_DAY "$today"
+  kv_set "$f" RX_NOW "$curx"
+  kv_set "$f" TX_NOW "$cutx"
+  state_sync_reset_cycle "$f"
 }
 
 # =============================================================
@@ -829,11 +876,15 @@ resolve_key(){
 node_add(){
   load_conf
   GEN_KEY_PATH=""
-  read -rp "节点名称(唯一标识,英文/数字): " n
+  read -rp "节点名称(唯一标识,字母数字._-): " n
   read -rp "备注名(中文友好名,推送显示,留空=同节点名): " rmk
   read -rp "DDNS 域名 / Tailscale IP / 主机: " h
   read -rp "SSH 端口 [22]: " p; p=${p:-22}
   read -rp "SSH 用户 [root]: " u; u=${u:-root}
+  [ -z "$n" ] || [ -z "$h" ] && { echo -e "${CR}名称和主机不能为空${C0}"; return; }
+  valid_node_name "$n" || { echo -e "${CR}节点名称只能包含字母、数字、点、下划线和短横线${C0}"; return; }
+  [ -z "$rmk" ] && rmk="$n"
+  if node_exists "$n"; then echo -e "${CR}已存在同名节点${C0}"; return; fi
   echo -e "${CGRY}SSH 私钥: 留空=用全局默认;或输入密钥名 / 文件路径;或输入 ${C0}${CB}new${C0}${CGRY} 新建密钥对${C0}"
   key_list
   if ! ls "$KEYS_DIR"/*.key >/dev/null 2>&1; then
@@ -850,9 +901,6 @@ node_add(){
       ;;
     *) k=$(resolve_key "$k") ;;
   esac
-  [ -z "$n" ] || [ -z "$h" ] && { echo -e "${CR}名称和主机不能为空${C0}"; return; }
-  [ -z "$rmk" ] && rmk="$n"
-  if grep -q "^$n|" "$NODES" 2>/dev/null; then echo -e "${CR}已存在同名节点${C0}"; return; fi
   echo "$n|$h|$p|$u|$k|$rmk" >> "$NODES"
   echo -e "${CG}已添加: ${rmk} [$n]  ($h:$p, key=${k:-全局默认})${C0}"
   # 校验该节点实际使用的密钥是否存在,不存在则提醒
@@ -883,7 +931,7 @@ node_set_remark(){
   node_list
   read -rp "要修改备注的节点名称: " n
   [ -z "$n" ] && return
-  grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
+  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
   read -rp "新备注名: " rmk
   [ -z "$rmk" ] && { echo "取消"; return; }
   local tmp; tmp=$(mktemp)
@@ -896,15 +944,11 @@ node_rename(){
   node_list
   read -rp "要重命名的节点名称: " old
   [ -z "$old" ] && return
-  grep -q "^$old|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
-  read -rp "新节点名称(唯一标识,英文/数字): " new
+  node_exists "$old" || { echo -e "${CR}未找到${C0}"; return; }
+  read -rp "新节点名称(唯一标识,字母数字._-): " new
   [ -z "$new" ] && { echo "取消"; return; }
-  case "$new" in *'|'*|*' '*)
-    echo -e "${CR}节点名称不能包含空格或 |${C0}"
-    return
-    ;;
-  esac
-  if grep -q "^$new|" "$NODES" 2>/dev/null; then
+  valid_node_name "$new" || { echo -e "${CR}节点名称只能包含字母、数字、点、下划线和短横线${C0}"; return; }
+  if node_exists "$new"; then
     echo -e "${CR}已存在同名节点${C0}"
     return
   fi
@@ -938,10 +982,10 @@ node_migrate_state(){
   read -rp "迁移到当前节点名称: " target
   [ -z "$old" ] || [ -z "$target" ] && { echo "取消"; return; }
   [ -f "$(st_file "$old")" ] || { echo -e "${CR}未找到旧状态: $old${C0}"; return; }
-  grep -q "^$target|" "$NODES" || { echo -e "${CR}未找到当前节点: $target${C0}"; return; }
+  node_exists "$target" || { echo -e "${CR}未找到当前节点: $target${C0}"; return; }
   state_migrate_name "$old" "$target"
   local line host port user key
-  line=$(grep "^$target|" "$NODES" | head -1)
+  line=$(node_line "$target")
   IFS='|' read -r _ host port user key _ <<< "$line"
   state_record_node_meta "$target" "$host" "$port" "$user" "$key"
   log "MIGRATE_STATE $old -> $target"
@@ -953,9 +997,17 @@ node_reset_usage(){
   node_list
   read -rp "要重置流量基准的节点名称: " n
   [ -z "$n" ] && return
-  grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
-  local f dom day cur_rx cur_tx cycle_rx_used cycle_tx_used next reset_day
+  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
+  local f dom cur_rx cur_tx cycle_rx_used cycle_tx_used next reset_day line host port user key remark
   f=$(st_file "$n")
+  line=$(node_line "$n")
+  IFS='|' read -r _ host port user key remark <<< "$line"
+  echo -e "${CGRY}正在刷新节点最新数据...${C0}"
+  if refresh_node_snapshot "$n" "$host" "$port" "$user" "$key"; then
+    echo -e "${CG}已刷新${C0}"
+  else
+    echo -e "${CY}刷新失败,将使用本地快照;如没有快照请先运行一次拉取${C0}"
+  fi
   local dom_default
   local existing_reset_day
   dom_default=$(kv_get "$f" RESET_DOM)
@@ -969,6 +1021,7 @@ node_reset_usage(){
   case "$dom" in ''|*[!0-9]*|0) echo -e "${CR}重置日需为 1-31${C0}"; return ;; esac
   [ "$dom" -gt 31 ] && { echo -e "${CR}重置日需为 1-31${C0}"; return; }
   cur_rx=$(kv_get "$f" RX_NOW); cur_tx=$(kv_get "$f" TX_NOW)
+  [ -n "$cur_rx" ] && [ -n "$cur_tx" ] || { echo -e "${CR}还没有该节点的流量快照,请先运行一次拉取${C0}"; return; }
   read -rp "重置起算日已用下行流量 [GiB, 默认 0]: " cycle_rx_used
   read -rp "重置起算日已用上行流量 [GiB, 默认 0]: " cycle_tx_used
   [ -z "$cycle_rx_used" ] && cycle_rx_used=0
@@ -979,7 +1032,7 @@ node_reset_usage(){
   cycle_tx_used=$(gib_to_bytes "$cycle_tx_used")
   reset_day=$(monthly_cycle_start "$dom")
   [ -z "$reset_day" ] && { echo -e "${CR}无法计算当前周期起算日${C0}"; return; }
-  state_reset_usage "$n" "$dom" "$reset_day" "$cur_rx" "$cur_tx" "" "" "$cycle_rx_used" "$cycle_tx_used"
+  state_reset_usage "$n" "$dom" "$reset_day" "$cur_rx" "$cur_tx" "$cur_rx" "$cur_tx" "$cycle_rx_used" "$cycle_tx_used"
   next=$(monthly_next_reset "$reset_day" "$dom")
   log "RESET_USAGE $n dom=$dom day=$reset_day next=${next:-unknown}"
   echo -e "${CG}已重置 [$n] 流量基准，每月重置日: $(printf '%02d' "$dom") 号${C0}"
@@ -993,9 +1046,18 @@ node_set_cycle_usage(){
   node_list
   read -rp "要修改当前周期已用的节点名称: " n
   [ -z "$n" ] && return
-  grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
+  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
   local f rxn txn cycle_rx cycle_tx rxu txu drx dtx cur_rx cur_tx want_rx want_tx want_rx_b want_tx_b new_rxu new_txu
+  local line host port user key remark
   f=$(st_file "$n")
+  line=$(node_line "$n")
+  IFS='|' read -r _ host port user key remark <<< "$line"
+  echo -e "${CGRY}正在刷新节点最新数据...${C0}"
+  if refresh_node_snapshot "$n" "$host" "$port" "$user" "$key"; then
+    echo -e "${CG}已刷新${C0}"
+  else
+    echo -e "${CY}刷新失败,将使用本地快照;如没有快照请先运行一次拉取${C0}"
+  fi
   state_sync_reset_cycle "$f"
   rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
   [ -n "$rxn" ] && [ -n "$txn" ] || { echo -e "${CR}还没有该节点的流量快照,请先运行一次拉取${C0}"; return; }
@@ -1004,8 +1066,8 @@ node_set_cycle_usage(){
   [ -n "$cycle_rx" ] && [ -n "$cycle_tx" ] || { echo -e "${CR}还没有周期基线,请先重置流量基准${C0}"; return; }
   rxu=$(kv_get "$f" CYCLE_RX_USED); [ -z "$rxu" ] && rxu=0
   txu=$(kv_get "$f" CYCLE_TX_USED); [ -z "$txu" ] && txu=0
-  drx=$((rxn-cycle_rx)); [ "$drx" -lt 0 ] && drx=0
-  dtx=$((txn-cycle_tx)); [ "$dtx" -lt 0 ] && dtx=0
+  drx=$(traffic_delta "$rxn" "$cycle_rx")
+  dtx=$(traffic_delta "$txn" "$cycle_tx")
   cur_rx=$((drx + rxu)); [ "$cur_rx" -lt 0 ] && cur_rx=0
   cur_tx=$((dtx + txu)); [ "$cur_tx" -lt 0 ] && cur_tx=0
   echo -e "${CGRY}当前周期已用:${C0} $(traffic_bytes_gb "$cur_rx" "$cur_tx")"
@@ -1029,8 +1091,9 @@ node_del(){
   node_list
   read -rp "输入要删除的节点名称: " n
   [ -z "$n" ] && return
-  if grep -q "^$n|" "$NODES"; then
-    sed -i "/^$(safe "$n")|/d;/^$n|/d" "$NODES"
+  if node_exists "$n"; then
+    local tmp; tmp=$(mktemp)
+    awk -F'|' -v n="$n" '$1!=n' "$NODES" > "$tmp" && mv "$tmp" "$NODES"
     rm -f "$(st_file "$n")" "$(snap_file "$n")"
     echo -e "${CG}已删除: $n${C0}"
   else
@@ -1258,23 +1321,26 @@ do_report(){
     [ "${name#\#}" = "$name" ] || continue
     [ -z "$remark" ] && remark="$name"
     nodes=$((nodes+1))
-    local f st df rxb txb rxn txn drx dtx rxu txu cdrx cdtx emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt
+    local f st df rxb txb cycle_rx cycle_tx rxn txn drx dtx cycle_drx cycle_dtx rxu txu cdrx cdtx emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt remark_html
     f=$(st_file "$name")
     state_sync_reset_cycle "$f"
     st=$(kv_get "$f" STATUS)
     df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
     rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
+    cycle_rx=$(kv_get "$f" CYCLE_RX_BASE); [ -z "$cycle_rx" ] && cycle_rx=$rxb
+    cycle_tx=$(kv_get "$f" CYCLE_TX_BASE); [ -z "$cycle_tx" ] && cycle_tx=$txb
     rxn=$(kv_get "$f" RX_NOW);  txn=$(kv_get "$f" TX_NOW)
     rxu=$(kv_get "$f" CYCLE_RX_USED); [ -z "$rxu" ] && rxu=0
     txu=$(kv_get "$f" CYCLE_TX_USED); [ -z "$txu" ] && txu=0
     reset_dom=$(kv_get "$f" RESET_DOM)
     reset_day=$(kv_get "$f" RESET_DAY)
     [ -z "$reset_dom" ] && [ -n "$reset_day" ] && reset_dom=$(date -d "$reset_day" '+%-d' 2>/dev/null)
-    drx=0; dtx=0
-    if [ -n "$rxn" ] && [ -n "$rxb" ]; then drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; fi
-    if [ -n "$txn" ] && [ -n "$txb" ]; then dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; fi
-    cdrx=$((drx + rxu)); [ "$cdrx" -lt 0 ] && cdrx=0
-    cdtx=$((dtx + txu)); [ "$cdtx" -lt 0 ] && cdtx=0
+    drx=$(traffic_delta "$rxn" "$rxb")
+    dtx=$(traffic_delta "$txn" "$txb")
+    cycle_drx=$(traffic_delta "$rxn" "$cycle_rx")
+    cycle_dtx=$(traffic_delta "$txn" "$cycle_tx")
+    cdrx=$((cycle_drx + rxu)); [ "$cdrx" -lt 0 ] && cdrx=0
+    cdtx=$((cycle_dtx + txu)); [ "$cdtx" -lt 0 ] && cdtx=0
     cycle_trx=$((cycle_trx + cdrx))
     cycle_ttx=$((cycle_ttx + cdtx))
     due_txt=""
@@ -1293,8 +1359,9 @@ do_report(){
     esac
     gline=$(traffic_bytes_gb "$drx" "$dtx")
     cycle_line=$(traffic_bytes_gb "$cdrx" "$cdtx")
+    remark_html=$(html_escape "$remark")
     lines="$lines
-$emoji <b>$remark</b>
+$emoji <b>$remark_html</b>
   今日  $gline
   周期  $cycle_line
   状态  失败 ${df}次${due_txt}
