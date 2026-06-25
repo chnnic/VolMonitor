@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.19"
+VER="1.4.20"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -270,11 +270,15 @@ state_sync_reset_cycle(){
     kv_set "$f" CYCLE_TX_USED 0
   fi
 }
+traffic_bytes_gb(){
+  local r=${1:-0} t=${2:-0}
+  awk -v r="$r" -v t="$t" 'BEGIN{printf "↓%.2fG · ↑%.2fG · ↓↑%.2fG",r/1073741824,t/1073741824,(r+t)/1073741824}'
+}
 traffic_gb(){
   local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
   [ -n "$rxn" ] && [ -n "$rxb" ] && { drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; }
   [ -n "$txn" ] && [ -n "$txb" ] && { dtx=$((txn-txb)); [ "$dtx" -lt 0 ] && dtx=$txn; }
-  awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}'
+  traffic_bytes_gb "$drx" "$dtx"
 }
 cycle_usage_gb(){
   local rxn=$1 rxb=$2 rxu=${3:-0} txn=$4 txb=$5 txu=${6:-0} drx=0 dtx=0
@@ -283,10 +287,9 @@ cycle_usage_gb(){
   drx=$((drx + rxu)); dtx=$((dtx + txu))
   [ "$drx" -lt 0 ] && drx=0
   [ "$dtx" -lt 0 ] && dtx=0
-  awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}'
+  traffic_bytes_gb "$drx" "$dtx"
 }
 fmt_up(){ local s=$1; printf '%dd %02dh %02dm' $((s/86400)) $((s%86400/3600)) $((s%3600/60)); }
-net_total(){ printf '%s\n' "$1" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4}END{printf "%.2f %.2f",rx/1073741824,tx/1073741824}'; }
 
 # =============================================================
 #  Telegram
@@ -349,7 +352,7 @@ metric_alerts(){
 # =============================================================
 render_one(){
   local name=$1 out=$2
-  local up load cpu mu mt mp du dt dp est svcs rxg txg today_line f rxb txb rxn txn
+  local up load cpu mu mt mp du dt dp est svcs rx_total tx_total total_line today_line f rxb txb rxn txn
   up=$(field UPTIME_S "$out"); load=$(field LOAD "$out"); cpu=$(field CPU "$out")
   mu=$(field MEM_USED_MB "$out"); mt=$(field MEM_TOTAL_MB "$out"); mp=$(field MEM_PCT "$out")
   du=$(field DISK_USED "$out"); dt=$(field DISK_TOTAL "$out"); dp=$(field DISK_PCT "$out")
@@ -358,17 +361,18 @@ render_one(){
   f=$(st_file "$name")
   rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
   rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
-  read -r rxg txg <<EOF
-$(net_total "$out")
+  read -r rx_total tx_total <<EOF
+$(printf '%s\n' "$out" | awk -F'[= ]' '/^NET=/{rx+=$3;tx+=$4}END{printf "%.0f %.0f",rx,tx}')
 EOF
   if [ -n "$rxn" ] && [ -n "$rxb" ] && [ -n "$txn" ] && [ -n "$txb" ]; then
     today_line=$(traffic_gb "$rxn" "$rxb" "$txn" "$txb")
   else
-    today_line="↓0.00G ↑0.00G"
+    today_line=$(traffic_bytes_gb 0 0)
   fi
+  total_line=$(traffic_bytes_gb "$rx_total" "$tx_total")
   [ -n "$up" ] && echo -e "  运行 ${CC}$(fmt_up "$up")${C0}  负载 ${CC}${load}${C0}  CPU ${cpu}核"
   [ -n "$mt" ] && echo -e "  内存 ${mu}/${mt} MB (${mp}%)   磁盘 ${du}/${dt} (${dp})"
-  echo -e "  今日实时 ${today_line}   总流量 ↓${rxg}G ↑${txg}G   TCP活动 ${est:-?}"
+  echo -e "  今日实时 ${today_line}   总流量 ${total_line}   TCP活动 ${est:-?}"
   [ -n "$svcs" ] && echo -e "  服务 ${CG}${svcs}${C0}"
   return 0
 }
@@ -984,6 +988,42 @@ node_reset_usage(){
   [ -n "$next" ] && echo -e "${CGRY}下次重置: $next${C0}"
 }
 
+node_set_cycle_usage(){
+  load_conf
+  node_list
+  read -rp "要修改当前周期已用的节点名称: " n
+  [ -z "$n" ] && return
+  grep -q "^$n|" "$NODES" || { echo -e "${CR}未找到${C0}"; return; }
+  local f rxn txn cycle_rx cycle_tx rxu txu drx dtx cur_rx cur_tx want_rx want_tx want_rx_b want_tx_b new_rxu new_txu
+  f=$(st_file "$n")
+  state_sync_reset_cycle "$f"
+  rxn=$(kv_get "$f" RX_NOW); txn=$(kv_get "$f" TX_NOW)
+  [ -n "$rxn" ] && [ -n "$txn" ] || { echo -e "${CR}还没有该节点的流量快照,请先运行一次拉取${C0}"; return; }
+  cycle_rx=$(kv_get "$f" CYCLE_RX_BASE); [ -z "$cycle_rx" ] && cycle_rx=$(kv_get "$f" RX_BASE)
+  cycle_tx=$(kv_get "$f" CYCLE_TX_BASE); [ -z "$cycle_tx" ] && cycle_tx=$(kv_get "$f" TX_BASE)
+  [ -n "$cycle_rx" ] && [ -n "$cycle_tx" ] || { echo -e "${CR}还没有周期基线,请先重置流量基准${C0}"; return; }
+  rxu=$(kv_get "$f" CYCLE_RX_USED); [ -z "$rxu" ] && rxu=0
+  txu=$(kv_get "$f" CYCLE_TX_USED); [ -z "$txu" ] && txu=0
+  drx=$((rxn-cycle_rx)); [ "$drx" -lt 0 ] && drx=0
+  dtx=$((txn-cycle_tx)); [ "$dtx" -lt 0 ] && dtx=0
+  cur_rx=$((drx + rxu)); [ "$cur_rx" -lt 0 ] && cur_rx=0
+  cur_tx=$((dtx + txu)); [ "$cur_tx" -lt 0 ] && cur_tx=0
+  echo -e "${CGRY}当前周期已用:${C0} $(traffic_bytes_gb "$cur_rx" "$cur_tx")"
+  read -rp "新的周期已用下行流量 [GiB]: " want_rx
+  read -rp "新的周期已用上行流量 [GiB]: " want_tx
+  [ -n "$want_rx" ] && [ -n "$want_tx" ] || { echo "取消"; return; }
+  valid_decimal "$want_rx" || { echo -e "${CR}下行流量需为数字${C0}"; return; }
+  valid_decimal "$want_tx" || { echo -e "${CR}上行流量需为数字${C0}"; return; }
+  want_rx_b=$(gib_to_bytes "$want_rx")
+  want_tx_b=$(gib_to_bytes "$want_tx")
+  new_rxu=$((want_rx_b - drx))
+  new_txu=$((want_tx_b - dtx))
+  kv_set "$f" CYCLE_RX_USED "$new_rxu"
+  kv_set "$f" CYCLE_TX_USED "$new_txu"
+  log "SET_CYCLE_USAGE $n rx=$want_rx_b tx=$want_tx_b"
+  echo -e "${CG}已更新 [$n] 当前周期已用:${C0} $(traffic_bytes_gb "$want_rx_b" "$want_tx_b")"
+}
+
 node_del(){
   load_conf
   node_list
@@ -1251,8 +1291,8 @@ do_report(){
       UP)   emoji="🟢"; up=$((up+1)) ;;
       *)    emoji="⚪" ;;
     esac
-    gline=$(awk -v r="$drx" -v t="$dtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
-    cycle_line=$(awk -v r="$cdrx" -v t="$cdtx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+    gline=$(traffic_bytes_gb "$drx" "$dtx")
+    cycle_line=$(traffic_bytes_gb "$cdrx" "$cdtx")
     lines="$lines
 $emoji <b>$remark</b>
   今日  $gline
@@ -1260,8 +1300,8 @@ $emoji <b>$remark</b>
   状态  失败 ${df}次${due_txt}
 "
   done < "$NODES"
-  local tot; tot=$(awk -v r="$trx" -v t="$ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
-  local cycle_tot; cycle_tot=$(awk -v r="$cycle_trx" -v t="$cycle_ttx" 'BEGIN{printf "↓%.2fG ↑%.2fG",r/1073741824,t/1073741824}')
+  local tot; tot=$(traffic_bytes_gb "$trx" "$ttx")
+  local cycle_tot; cycle_tot=$(traffic_bytes_gb "$cycle_trx" "$cycle_ttx")
   local msg
   msg=$(printf '📊 <b>VolMonitor 日报</b>  %s\n节点 %d · 在线 %d · 离线 %d · 失败 %d次\n\n今日合计\n  %s\n重置周期合计\n  %s\n————————————%s' \
     "$today" "$nodes" "$up" "$down" "$tdf" "$tot" "$cycle_tot" "$lines")
@@ -1422,7 +1462,8 @@ menu(){
           menu_item "3/r" "重命名节点" "迁移日报基线/状态"
           menu_item "4/m" "迁移旧状态到当前节点" "修复手动改名后的基线"
           menu_item "5/u" "重置流量基准" "作为月付续费倒计时起点"
-          menu_item "6/d" "删除节点"
+          menu_item "6/c" "修改当前周期已用" "校准日报周期流量"
+          menu_item "7/d" "删除节点"
           menu_item "0/b" "返回"
           echo
           menu_prompt; read -r s || break
@@ -1432,7 +1473,8 @@ menu(){
             3|r|R) node_rename; pause ;;
             4|m|M) node_migrate_state; pause ;;
             5|u|U) node_reset_usage; pause ;;
-            6|d|D) node_del; pause ;;
+            6|c|C) node_set_cycle_usage; pause ;;
+            7|d|D) node_del; pause ;;
             0|b|B|"") break ;;
           esac
         done ;;
