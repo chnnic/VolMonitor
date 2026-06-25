@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.18"
+VER="1.4.19"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -247,6 +247,29 @@ monthly_next_reset(){
   fi
   printf '%s\n' "$candidate"
 }
+state_sync_reset_cycle(){
+  local f=$1 dom cur_day next_day today changed=0
+  [ -f "$f" ] || return 0
+  dom=$(kv_get "$f" RESET_DOM)
+  cur_day=$(kv_get "$f" RESET_DAY)
+  [ -n "$dom" ] && [ -n "$cur_day" ] || return 0
+  today=$(date '+%F')
+  while next_day=$(monthly_next_reset "$cur_day" "$dom"); do
+    [ "$(date_to_epoch "$next_day")" -le "$(date_to_epoch "$today")" ] || break
+    cur_day=$next_day
+    changed=1
+  done
+  if [ "$changed" = "1" ]; then
+    kv_set "$f" RESET_DAY "$cur_day"
+    kv_set "$f" DAY "$today"
+    kv_set "$f" RX_BASE "$(kv_get "$f" RX_NOW)"
+    kv_set "$f" TX_BASE "$(kv_get "$f" TX_NOW)"
+    kv_set "$f" CYCLE_RX_BASE "$(kv_get "$f" RX_NOW)"
+    kv_set "$f" CYCLE_TX_BASE "$(kv_get "$f" TX_NOW)"
+    kv_set "$f" CYCLE_RX_USED 0
+    kv_set "$f" CYCLE_TX_USED 0
+  fi
+}
 traffic_gb(){
   local rxn=$1 rxb=$2 txn=$3 txb=$4 drx=0 dtx=0
   [ -n "$rxn" ] && [ -n "$rxb" ] && { drx=$((rxn-rxb)); [ "$drx" -lt 0 ] && drx=$rxn; }
@@ -387,6 +410,7 @@ EOF
     [ -z "$(kv_get "$f" RX_BASE)" ] && { kv_set "$f" RX_BASE "$curx"; kv_set "$f" TX_BASE "$cutx"; }
     [ -z "$(kv_get "$f" RESET_DAY)" ] && kv_set "$f" RESET_DAY "$(date '+%F')"
     kv_set "$f" RX_NOW "$curx"; kv_set "$f" TX_NOW "$cutx"
+    state_sync_reset_cycle "$f"
     if [ "$prev" = "DOWN" ]; then
       tg_send "$(printf '✅ <b>%s</b> 已恢复在线\n主机: %s\n时间: %s' \
         "$label" "$host:${port:-22}" "$(date '+%F %T %Z')")"
@@ -439,6 +463,7 @@ show_one_status(){
   local f status fails last check snap cycle_rx cycle_tx rxn txn cycle_rx_used cycle_tx_used cycle_line
   state_adopt_by_endpoint "$name" "$host" "$port" "$user" "$key"
   f=$(st_file "$name")
+  state_sync_reset_cycle "$f"
   status=$(kv_get "$f" STATUS); fails=$(kv_get "$f" FAILS)
   last=$(kv_get "$f" LASTSEEN); check=$(kv_get "$f" LASTCHECK)
   # 兼容旧状态文件:STATUS 为空时,凭最近一次成功记录推断
@@ -983,6 +1008,7 @@ node_list(){
     [ -z "$remark" ] && remark="$name"
     local f reset_dom reset_day next_reset reset_txt
     f=$(st_file "$name")
+    state_sync_reset_cycle "$f"
     reset_dom=$(kv_get "$f" RESET_DOM)
     reset_day=$(kv_get "$f" RESET_DAY)
     [ -z "$reset_dom" ] && [ -n "$reset_day" ] && reset_dom=$(date -d "$reset_day" '+%-d' 2>/dev/null)
@@ -1194,6 +1220,7 @@ do_report(){
     nodes=$((nodes+1))
     local f st df rxb txb rxn txn drx dtx rxu txu cdrx cdtx emoji gline cycle_line reset_dom reset_day next_reset due_days due_txt
     f=$(st_file "$name")
+    state_sync_reset_cycle "$f"
     st=$(kv_get "$f" STATUS)
     df=$(kv_get "$f" DFAILS); [ -z "$df" ] && df=0
     rxb=$(kv_get "$f" RX_BASE); txb=$(kv_get "$f" TX_BASE)
