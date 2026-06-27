@@ -5,7 +5,7 @@
 #  被控离线(连续失败达阈值)发 Telegram 告警,恢复时发恢复通知
 #  采集脚本走 sh -s 远程执行,兼容 Debian/Ubuntu/Alpine/OpenWrt
 # =============================================================
-VER="1.4.21"
+VER="1.4.22"
 
 # ---------- 更新源 ----------
 REPO_RAW="${VOLMON_REPO:-https://raw.githubusercontent.com/chnnic/VolMonitor/main}"
@@ -118,6 +118,25 @@ snap_file(){ echo "$SNAP_DIR/$(safe "$1").snap"; }
 valid_node_name(){ case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; *) return 0 ;; esac; }
 node_exists(){ awk -F'|' -v n="$1" '$1==n{found=1; exit} END{exit !found}' "$NODES" 2>/dev/null; }
 node_line(){ awk -F'|' -v n="$1" '$1==n{print; exit}' "$NODES" 2>/dev/null; }
+node_line_by_index(){
+  local idx=$1
+  awk -F'|' -v idx="$idx" '
+    /^[[:space:]]*$/ { next }
+    /^[[:space:]]*#/ { next }
+    { i++; if(i==idx){ print; exit } }
+  ' "$NODES" 2>/dev/null
+}
+node_ref_line(){
+  local ref=$1 line
+  [ -n "$ref" ] || return 1
+  line=$(node_line "$ref")
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line"
+    return 0
+  fi
+  case "$ref" in ''|*[!0-9]*) return 1 ;; esac
+  node_line_by_index "$ref"
+}
 
 state_migrate_name(){
   local old=$1 new=$2 old_state new_state old_snap new_snap
@@ -929,9 +948,12 @@ node_add(){
 node_set_remark(){
   load_conf
   node_list
-  read -rp "要修改备注的节点名称: " n
-  [ -z "$n" ] && return
-  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
+  read -rp "要修改备注的节点名称/序号: " ref
+  [ -z "$ref" ] && return
+  local line n
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到${C0}"; return; }
+  IFS='|' read -r n _ _ _ _ _ <<< "$line"
   read -rp "新备注名: " rmk
   [ -z "$rmk" ] && { echo "取消"; return; }
   local tmp; tmp=$(mktemp)
@@ -942,9 +964,12 @@ node_set_remark(){
 node_rename(){
   load_conf
   node_list
-  read -rp "要重命名的节点名称: " old
-  [ -z "$old" ] && return
-  node_exists "$old" || { echo -e "${CR}未找到${C0}"; return; }
+  read -rp "要重命名的节点名称/序号: " ref
+  [ -z "$ref" ] && return
+  local line old
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到${C0}"; return; }
+  IFS='|' read -r old _ _ _ _ _ <<< "$line"
   read -rp "新节点名称(唯一标识,字母数字._-): " new
   [ -z "$new" ] && { echo "取消"; return; }
   valid_node_name "$new" || { echo -e "${CR}节点名称只能包含字母、数字、点、下划线和短横线${C0}"; return; }
@@ -979,14 +1004,15 @@ node_migrate_state(){
     echo "  (空)"
   fi
   read -rp "旧状态名称: " old
-  read -rp "迁移到当前节点名称: " target
+  read -rp "迁移到当前节点名称/序号: " ref
+  [ -z "$old" ] || [ -z "$ref" ] && { echo "取消"; return; }
+  local line target host port user key
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到当前节点${C0}"; return; }
+  IFS='|' read -r target host port user key _ <<< "$line"
   [ -z "$old" ] || [ -z "$target" ] && { echo "取消"; return; }
   [ -f "$(st_file "$old")" ] || { echo -e "${CR}未找到旧状态: $old${C0}"; return; }
-  node_exists "$target" || { echo -e "${CR}未找到当前节点: $target${C0}"; return; }
   state_migrate_name "$old" "$target"
-  local line host port user key
-  line=$(node_line "$target")
-  IFS='|' read -r _ host port user key _ <<< "$line"
   state_record_node_meta "$target" "$host" "$port" "$user" "$key"
   log "MIGRATE_STATE $old -> $target"
   echo -e "${CG}已迁移旧状态: $old -> $target${C0}"
@@ -995,13 +1021,13 @@ node_migrate_state(){
 node_reset_usage(){
   load_conf
   node_list
-  read -rp "要重置流量基准的节点名称: " n
-  [ -z "$n" ] && return
-  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
-  local f dom cur_rx cur_tx cycle_rx_used cycle_tx_used next reset_day line host port user key remark
+  read -rp "要重置流量基准的节点名称/序号: " ref
+  [ -z "$ref" ] && return
+  local f dom cur_rx cur_tx cycle_rx_used cycle_tx_used next reset_day line n host port user key
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到${C0}"; return; }
+  IFS='|' read -r n host port user key remark <<< "$line"
   f=$(st_file "$n")
-  line=$(node_line "$n")
-  IFS='|' read -r _ host port user key remark <<< "$line"
   echo -e "${CGRY}正在刷新节点最新数据...${C0}"
   if refresh_node_snapshot "$n" "$host" "$port" "$user" "$key"; then
     echo -e "${CG}已刷新${C0}"
@@ -1044,14 +1070,14 @@ node_reset_usage(){
 node_set_cycle_usage(){
   load_conf
   node_list
-  read -rp "要修改当前周期已用的节点名称: " n
-  [ -z "$n" ] && return
-  node_exists "$n" || { echo -e "${CR}未找到${C0}"; return; }
+  read -rp "要修改当前周期已用的节点名称/序号: " ref
+  [ -z "$ref" ] && return
   local f rxn txn cycle_rx cycle_tx rxu txu drx dtx cur_rx cur_tx want_rx want_tx want_rx_b want_tx_b new_rxu new_txu
-  local line host port user key remark
+  local line n host port user key
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到${C0}"; return; }
+  IFS='|' read -r n host port user key remark <<< "$line"
   f=$(st_file "$n")
-  line=$(node_line "$n")
-  IFS='|' read -r _ host port user key remark <<< "$line"
   echo -e "${CGRY}正在刷新节点最新数据...${C0}"
   if refresh_node_snapshot "$n" "$host" "$port" "$user" "$key"; then
     echo -e "${CG}已刷新${C0}"
@@ -1089,9 +1115,13 @@ node_set_cycle_usage(){
 node_del(){
   load_conf
   node_list
-  read -rp "输入要删除的节点名称: " n
-  [ -z "$n" ] && return
-  if node_exists "$n"; then
+  read -rp "输入要删除的节点名称/序号: " ref
+  [ -z "$ref" ] && return
+  local line n
+  line=$(node_ref_line "$ref")
+  [ -n "$line" ] || { echo -e "${CR}未找到${C0}"; return; }
+  IFS='|' read -r n _ _ _ _ _ <<< "$line"
+  if [ -n "$n" ]; then
     local tmp; tmp=$(mktemp)
     awk -F'|' -v n="$n" '$1!=n' "$NODES" > "$tmp" && mv "$tmp" "$NODES"
     rm -f "$(st_file "$n")" "$(snap_file "$n")"
